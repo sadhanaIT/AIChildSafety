@@ -2,7 +2,6 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Text
 from datetime import datetime
 from app.database import Base
 
-
 class SafetyLog(Base):
     __tablename__ = "safety_logs"
 
