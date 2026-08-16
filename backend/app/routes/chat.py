@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.models import SafetyLog
-from app.pipeline.preprocessing import preprocess_and_detect_pii
+from app.pipeline.preprocessing import preprocess_text
 from app.pipeline.risk_calculator import calculate_risk_and_decide
 from app.pipeline.llm_connector import query_external_llm
 
@@ -20,7 +20,7 @@ class ChatRequest(BaseModel):
 @router.post("/chat")
 async def process_chat(request: ChatRequest, db: Session = Depends(get_db)):
     # Step 1: Preprocessing & PII Detection
-    prep_res = preprocess_and_detect_pii(request.message)
+    prep_res = preprocess_text(request.message)
 
     # Step 2: Simulated ML Model Scores (DistilBERT & RoBERTa integration placeholders)
     mock_harm_score = 0.8 if "harmful" in request.message.lower() else 0.1
