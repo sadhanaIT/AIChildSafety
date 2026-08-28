@@ -6,8 +6,16 @@ from google import genai
 from google.genai import types
 
 
-# Explicitly load backend/.env
+# ============================================================
+# ENVIRONMENT CONFIGURATION
+# ============================================================
+
+# llm_connector.py
+#     ↓ parent = pipeline
+#     ↓ parent = app
+#     ↓ parent = backend
 BASE_DIR = Path(__file__).resolve().parents[2]
+
 ENV_FILE = BASE_DIR / ".env"
 
 load_dotenv(ENV_FILE)
@@ -17,8 +25,17 @@ api_key = os.getenv("GEMINI_API_KEY")
 print("LLM Connector .env path:", ENV_FILE)
 print("LLM Connector API key loaded:", bool(api_key))
 
+
+# ============================================================
+# GEMINI CLIENT
+# ============================================================
+
 client = genai.Client(api_key=api_key) if api_key else None
 
+
+# ============================================================
+# LLM QUERY
+# ============================================================
 
 def query_external_llm(prompt: str, provider: str = "gemini") -> str:
     """
