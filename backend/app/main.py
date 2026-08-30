@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import chat
-from app.database import engine, Base
-from app.models import SafetyLog  # Imports your models so tables can be created
 
-# Automatically create database tables in MySQL if they do not exist
-Base.metadata.create_all(bind=engine)
+from app.database import engine, Base
+from app.models import SafetyLog
+from app.routes import chat, dashboard
+
+
+# ==========================================
+# CREATE FASTAPI APPLICATION
+# ==========================================
 
 app = FastAPI(
     title="AI Child Digital Safety Platform",
@@ -13,7 +16,11 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for React frontend (running on localhost:3000)
+
+# ==========================================
+# ENABLE CORS
+# ==========================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -22,9 +29,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register chat routes
+
+# ==========================================
+# REGISTER ROUTES
+# ==========================================
+
 app.include_router(chat.router)
+app.include_router(dashboard.router)
+
+
+# ==========================================
+# CREATE DATABASE TABLES
+# ==========================================
+
+Base.metadata.create_all(bind=engine)
+
+
+# ==========================================
+# ROOT ENDPOINT
+# ==========================================
 
 @app.get("/")
 def read_root():
-    return {"status": "Safety Engine Running"}
+    return {
+        "status": "Safety Engine Running"
+    }
+
