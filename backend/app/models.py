@@ -1,6 +1,5 @@
 from datetime import datetime
-
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime
+from sqlalchemy import Column, Integer, String, Float, Text, DateTime, Boolean
 from app.database import Base
 
 
@@ -42,7 +41,6 @@ class SafetyLog(Base):
     )
 
     # PII types detected
-    # Example: "email, phone"
     pii_detected = Column(
         String(255),
         nullable=True
@@ -68,3 +66,12 @@ class CustomRule(Base):
         index=True,
         nullable=False
     )
+
+
+class ParentProfile(Base):
+    __tablename__ = "parent_profile"
+
+    id = Column(Integer, primary_key=True, index=True)
+    profile_name = Column(String(255), default="Child Companion Profile")
+    sensitivity = Column(String(100), default="High (Strict PII & Toxicity Block)")
+    notifications_enabled = Column(Boolean, default=True)

@@ -11,6 +11,7 @@ export default function Profile() {
   const [savedMessage, setSavedMessage] = useState(false);
   const [actionMessage, setActionMessage] = useState('');
 
+  // Fetch rules and profile settings from backend on load
   useEffect(() => {
     fetch('http://localhost:8000/api/v1/profile/rules')
       .then(res => res.json())
@@ -18,6 +19,9 @@ export default function Profile() {
         if (data.keywords) {
           setRestrictedWords(data.keywords);
         }
+        if (data.profile_name) setProfileName(data.profile_name);
+        if (data.sensitivity) setSensitivity(data.sensitivity);
+        if (data.notifications_enabled !== undefined) setNotificationsEnabled(data.notifications_enabled);
       })
       .catch(err => console.log("Failed to load custom rules", err));
   }, []);
@@ -56,12 +60,17 @@ export default function Profile() {
       await fetch('http://localhost:8000/api/v1/profile/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keywords: restrictedWords })
+        body: JSON.stringify({
+          profile_name: profileName,
+          sensitivity: sensitivity,
+          notifications_enabled: notificationsEnabled,
+          keywords: restrictedWords
+        })
       });
       setSavedMessage(true);
       setTimeout(() => setSavedMessage(false), 3000);
     } catch (err) {
-      console.error("Failed to save rules", err);
+      console.error("Failed to save profile configuration", err);
     }
   };
 
