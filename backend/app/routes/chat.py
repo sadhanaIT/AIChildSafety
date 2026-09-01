@@ -13,7 +13,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import SafetyLog
+from app.models import SafetyLog, CustomRule
 
 from app.pipeline.ML_models import evaluate_harm_and_emotion
 from app.pipeline.pii_detector import detect_pii
@@ -75,6 +75,8 @@ async def process_chat_message(
 
     Child Input
         ↓
+    Custom Rule Check
+        ↓
     Image Analysis
         ↓
     Harm Detection
@@ -123,6 +125,65 @@ async def process_chat_message(
         print("Age Group:", age_group)
         print("Text Provided:", bool(user_message))
         print("Image Provided:", bool(file))
+
+        # ====================================================
+        # 1.5. CHECK CUSTOM BACKEND BLOCKED KEYWORDS
+        # ====================================================
+
+        if user_message:
+            custom_rules = db.query(CustomRule).all()
+            message_lower = user_message.lower()
+
+            for rule in custom_rules:
+                if rule.keyword and rule.keyword in message_lower:
+                    print(f"\nContent BLOCKED by Custom Guardian Rule: '{rule.keyword}'")
+
+                    ai_response_text = (
+                        "This message has been blocked by your guardian's custom safety rules."
+                    )
+                    decision = "BLOCK"
+                    risk_score = 1.0
+                    warning_message = f"Triggered custom restricted term: '{rule.keyword}'"
+                    emotion = "neutral"
+                    pii_results = [{"type": f"Custom Filter: {rule.keyword}"}]
+                    image_risk = 0.0
+                    image_tags = []
+
+                    # Database Logging for Custom Block
+                    log_id = None
+                    try:
+                        db_log = SafetyLog(
+                            child_message=user_message,
+                            ai_response=ai_response_text,
+                            age_group=age_group,
+                            emotion=emotion,
+                            risk_score=risk_score,
+                            decision=decision,
+                            pii_detected=f"Custom Rule Matched: {rule.keyword}",
+                        )
+                        db.add(db_log)
+                        db.commit()
+                        db.refresh(db_log)
+                        log_id = db_log.id
+                        print(f"Safety log saved successfully. ID: {db_log.id}")
+                    except Exception as db_error:
+                        db.rollback()
+                        print("\nWARNING: Database logging failed:", db_error)
+
+                    print("\nRequest completed.")
+                    print("=" * 60)
+
+                    return {
+                        "status": "BLOCK",
+                        "risk_score": round(risk_score, 3),
+                        "emotion": emotion,
+                        "pii_details": pii_results,
+                        "response": ai_response_text,
+                        "warning": warning_message,
+                        "image_risk": round(image_risk, 3),
+                        "image_tags": image_tags,
+                        "log_id": log_id,
+                    }
 
         # ====================================================
         # 2. IMAGE ANALYSIS

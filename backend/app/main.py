@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
-from app.models import SafetyLog
-from app.routes import chat, dashboard
+from app.models import SafetyLog, CustomRule
+from app.routes import chat, dashboard, profile
 
 
 # ==========================================
@@ -36,6 +36,7 @@ app.add_middleware(
 
 app.include_router(chat.router)
 app.include_router(dashboard.router)
+app.include_router(profile.router)
 
 
 # ==========================================
@@ -54,4 +55,3 @@ def read_root():
     return {
         "status": "Safety Engine Running"
     }
-

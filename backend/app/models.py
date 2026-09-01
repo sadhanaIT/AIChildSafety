@@ -54,3 +54,17 @@ class SafetyLog(Base):
         default=datetime.utcnow,
         nullable=False
     )
+
+
+class CustomRule(Base):
+    __tablename__ = "custom_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Custom restricted keyword or phrase defined by the parent
+    keyword = Column(
+        String(255),
+        unique=True,
+        index=True,
+        nullable=False
+    )

@@ -5,9 +5,16 @@ import React, {
 } from "react";
 
 import "./App.css";
+import ParentDashboard from "./ParentDashboard";
+import Profile from "./Profile";
 
 
 function App() {
+
+  // ==========================================================
+  // NAVIGATION TAB STATE
+  // ==========================================================
+  const [activeTab, setActiveTab] = useState("chat");
 
   // ==========================================================
   // STATE
@@ -410,333 +417,390 @@ function App() {
     <div className="app-container">
 
       {/* ====================================================
-          HEADER
+          TOP NAVIGATION TABS
       ==================================================== */}
+      <nav style={{ background: '#1a1a1a', padding: '12px 25px', display: 'flex', gap: '15px', alignItems: 'center', borderBottom: '1px solid #333' }}>
+        <h3 style={{ color: '#fff', margin: 0, marginRight: '15px', fontSize: '16px' }}>SafeLayer Platform</h3>
+        <button
+          onClick={() => setActiveTab('chat')}
+          style={{
+            background: activeTab === 'chat' ? '#007bff' : 'transparent',
+            color: '#fff',
+            border: 'none',
+            padding: '6px 14px',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontWeight: '600'
+          }}
+        >
+          Child Chat
+        </button>
+        <button
+          onClick={() => setActiveTab('dashboard')}
+          style={{
+            background: activeTab === 'dashboard' ? '#007bff' : 'transparent',
+            color: '#fff',
+            border: 'none',
+            padding: '6px 14px',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontWeight: '600'
+          }}
+        >
+          Parent Dashboard
+        </button>
+        <button
+          onClick={() => setActiveTab('profile')}
+          style={{
+            background: activeTab === 'profile' ? '#007bff' : 'transparent',
+            color: '#fff',
+            border: 'none',
+            padding: '6px 14px',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontWeight: '600'
+          }}
+        >
+          Profile
+        </button>
+      </nav>
 
-      <header className="app-header">
+      {activeTab === 'dashboard' ? (
+        <ParentDashboard />
+      ) : activeTab === 'profile' ? (
+        <Profile />
+      ) : (
+        <>
+          {/* ====================================================
+              HEADER
+          ==================================================== */}
 
-        <h2>
-          SafeLayer
-        </h2>
+          <header className="app-header">
 
-        <p>
-          A universal safety layer for secure AI interactions.
-        </p>
-
-      </header>
-
-
-      {/* ====================================================
-          CHAT
-      ==================================================== */}
-
-      <main className="chat-window">
-
-        {chatLog.length === 0 && (
-
-          <div className="welcome-message">
-
-            <h3>
-              Welcome to SafeLayer
-            </h3>
+            <h2>
+              SafeLayer
+            </h2>
 
             <p>
-              Ask questions, explore ideas, learn,
-              or get help with everyday tasks.
+              A universal safety layer for secure AI interactions.
             </p>
 
-          </div>
-
-        )}
+          </header>
 
 
-        {chatLog.map((chat, index) => (
+          {/* ====================================================
+              CHAT
+          ==================================================== */}
 
-          <div
-            key={index}
-            className={`message ${chat.sender}`}
-          >
+          <main className="chat-window">
 
-            <strong>
-              {chat.sender === "child"
-                ? "You"
-                : "Assistant"}
-              :
-            </strong>
+            {chatLog.length === 0 && (
 
+              <div className="welcome-message">
 
-            {/* ==============================================
-                TEXT
-            ============================================== */}
+                <h3>
+                  Welcome to SafeLayer
+                </h3>
 
-            {chat.text && (
+                <p>
+                  Ask questions, explore ideas, learn,
+                  or get help with everyday tasks.
+                </p>
 
-              <p className="message-text">
-                {chat.text}
-              </p>
-
-            )}
-
-
-            {/* ==============================================
-                IMAGE
-            ============================================== */}
-
-            {chat.image && (
-
-              <img
-                src={chat.image}
-                alt="Uploaded by user"
-                className="uploaded-image"
-              />
-
-            )}
-
-
-            {/* ==============================================
-                FILE NAME
-            ============================================== */}
-
-            {chat.fileName && (
-
-              <div className="file-name">
-                📎 {chat.fileName}
               </div>
 
             )}
 
 
-            {/* ==============================================
-                SAFETY INFORMATION
-            ============================================== */}
+            {chatLog.map((chat, index) => (
 
-            {chat.sender === "ai" && (
+              <div
+                key={index}
+                className={`message ${chat.sender}`}
+              >
 
-              <div className="safety-meta">
-
-                <div className="safety-top-row">
-
-                  {chat.status && (
-
-                    <span
-                      className={
-                        getStatusClass(
-                          chat.status
-                        )
-                      }
-                    >
-
-                      Status: {chat.status}
-
-                      {chat.risk !== null &&
-                        ` | Risk: ${chat.risk}`}
-
-                    </span>
-
-                  )}
+                <strong>
+                  {chat.sender === "child"
+                    ? "You"
+                    : "Assistant"}
+                  :
+                </strong>
 
 
-                  {chat.emotion && (
+                {/* ==============================================
+                    TEXT
+                ============================================== */}
 
-                    <span className="emotion-badge">
+                {chat.text && (
 
-                      🧠 Emotion:
+                  <p className="message-text">
+                    {chat.text}
+                  </p>
 
-                      <strong>
-                        {chat.emotion}
-                      </strong>
-
-                    </span>
-
-                  )}
-
-                </div>
+                )}
 
 
-                {/* ==========================================
-                    IMAGE RISK
-                ========================================== */}
+                {/* ==============================================
+                    IMAGE
+                ============================================== */}
 
-                {chat.imageRisk > 0 && (
+                {chat.image && (
 
-                  <div className="image-risk">
+                  <img
+                    src={chat.image}
+                    alt="Uploaded by user"
+                    className="uploaded-image"
+                  />
 
-                    🖼️ Image Risk Score:
+                )}
 
-                    {" "}
 
-                    {chat.imageRisk}
+                {/* ==============================================
+                    FILE NAME
+                ============================================== */}
 
+                {chat.fileName && (
+
+                  <div className="file-name">
+                    📎 {chat.fileName}
                   </div>
 
                 )}
 
 
-                {/* ==========================================
-                    WARNING
-                ========================================== */}
+                {/* ==============================================
+                    SAFETY INFORMATION
+                ============================================== */}
 
-                {chat.warning && (
+                {chat.sender === "ai" && (
 
-                  <div className="warning-message">
+                  <div className="safety-meta">
 
-                    ⚠️ {chat.warning}
+                    <div className="safety-top-row">
 
-                  </div>
+                      {chat.status && (
 
-                )}
+                        <span
+                          className={
+                            getStatusClass(
+                              chat.status
+                            )
+                          }
+                        >
+
+                          Status: {chat.status}
+
+                          {chat.risk !== null &&
+                            ` | Risk: ${chat.risk}`}
+
+                        </span>
+
+                      )}
 
 
-                {/* ==========================================
-                    PII
-                ========================================== */}
+                      {chat.emotion && (
 
-                {chat.pii &&
-                  chat.pii.length > 0 && (
+                        <span className="emotion-badge">
 
-                    <div className="pii-warning">
+                          🧠 Emotion:
 
-                      <strong>
-                        ⚠️ Sensitive information detected
-                      </strong>
+                          <strong>
+                            {chat.emotion}
+                          </strong>
 
-                      <ul>
+                        </span>
 
-                        {chat.pii.map(
-                          (item, piiIndex) => (
-
-                            <li key={piiIndex}>
-
-                              {item.type ||
-                                "Sensitive information"}
-
-                            </li>
-
-                          )
-                        )}
-
-                      </ul>
+                      )}
 
                     </div>
 
-                  )}
+
+                    {/* ==========================================
+                        IMAGE RISK
+                    ========================================== */}
+
+                    {chat.imageRisk > 0 && (
+
+                      <div className="image-risk">
+
+                        🖼️ Image Risk Score:
+
+                        {" "}
+
+                        {chat.imageRisk}
+
+                      </div>
+
+                    )}
+
+
+                    {/* ==========================================
+                        WARNING
+                    ========================================== */}
+
+                    {chat.warning && (
+
+                      <div className="warning-message">
+
+                        ⚠️ {chat.warning}
+
+                      </div>
+
+                    )}
+
+
+                    {/* ==========================================
+                        PII
+                    ========================================== */}
+
+                    {chat.pii &&
+                      chat.pii.length > 0 && (
+
+                        <div className="pii-warning">
+
+                          <strong>
+                            ⚠️ Sensitive information detected
+                          </strong>
+
+                          <ul>
+
+                            {chat.pii.map(
+                              (item, piiIndex) => (
+
+                                <li key={piiIndex}>
+
+                                  {item.type ||
+                                    "Sensitive information"}
+
+                                </li>
+
+                              )
+                            )}
+
+                          </ul>
+
+                        </div>
+
+                      )}
+
+                  </div>
+
+                )}
+
+              </div>
+
+            ))}
+
+
+            {/* ==================================================
+                LOADING
+            ================================================== */}
+
+            {loading && (
+
+              <div className="loading-indicator">
+
+                <span className="loading-dot">
+                  ●
+                </span>
+
+                Safety Layer is analyzing your
+                message...
 
               </div>
 
             )}
 
-          </div>
 
-        ))}
+            <div ref={chatEndRef} />
 
-
-        {/* ==================================================
-            LOADING
-        ================================================== */}
-
-        {loading && (
-
-          <div className="loading-indicator">
-
-            <span className="loading-dot">
-              ●
-            </span>
-
-            Safety Layer is analyzing your
-            message...
-
-          </div>
-
-        )}
+          </main>
 
 
-        <div ref={chatEndRef} />
+          {/* ====================================================
+              INPUT AREA
+          ==================================================== */}
 
-      </main>
+          <footer className="input-area">
 
-
-      {/* ====================================================
-          INPUT AREA
-      ==================================================== */}
-
-      <footer className="input-area">
-
-        <input
-          id="file-upload"
-          type="file"
-          accept="image/*"
-          onChange={handleFileChange}
-          disabled={loading}
-          className="hidden-file-input"
-        />
+            <input
+              id="file-upload"
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              disabled={loading}
+              className="hidden-file-input"
+            />
 
 
-        <label
-          htmlFor="file-upload"
-          className="attach-button"
-        >
+            <label
+              htmlFor="file-upload"
+              className="attach-button"
+            >
 
-          📷
+              📷
 
-          {selectedFile
-            ? " Image selected"
-            : " Attach Image"}
+              {selectedFile
+                ? " Image selected"
+                : " Attach Image"}
 
-        </label>
-
-
-        {selectedFile && (
-
-          <button
-            type="button"
-            className="remove-file-button"
-            onClick={removeSelectedFile}
-            disabled={loading}
-          >
-            ×
-          </button>
-
-        )}
+            </label>
 
 
-        <form
-          className="message-form"
-          onSubmit={sendMessage}
-        >
+            {selectedFile && (
 
-          <input
-            type="text"
-            value={message}
-            onChange={(event) =>
-              setMessage(event.target.value)
-            }
-            placeholder="Ask me anything..."
-            disabled={loading}
-            autoComplete="off"
-          />
+              <button
+                type="button"
+                className="remove-file-button"
+                onClick={removeSelectedFile}
+                disabled={loading}
+              >
+                ×
+              </button>
+
+            )}
 
 
-          <button
-            type="submit"
-            className="send-btn"
-            disabled={
-              loading ||
-              (
-                !message.trim() &&
-                !selectedFile
-              )
-            }
-          >
+            <form
+              className="message-form"
+              onSubmit={sendMessage}
+            >
 
-            {loading
-              ? "..."
-              : "Send"}
+              <input
+                type="text"
+                value={message}
+                onChange={(event) =>
+                  setMessage(event.target.value)
+                }
+                placeholder="Ask me anything..."
+                disabled={loading}
+                autoComplete="off"
+              />
 
-          </button>
 
-        </form>
+              <button
+                type="submit"
+                className="send-btn"
+                disabled={
+                  loading ||
+                  (
+                    !message.trim() &&
+                    !selectedFile
+                  )
+                }
+              >
 
-      </footer>
+                {loading
+                  ? "..."
+                  : "Send"}
+
+              </button>
+
+            </form>
+
+          </footer>
+        </>
+      )}
 
     </div>
   );
