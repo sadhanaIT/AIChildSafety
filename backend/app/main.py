@@ -4,6 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
 from app.models import SafetyLog, CustomRule
 from app.routes import chat, dashboard, profile
+from app.database import engine
+from app.models import Base
+
+# Automatically create database tables if they don't exist
+Base.metadata.create_all(bind=engine)
 
 
 # ==========================================

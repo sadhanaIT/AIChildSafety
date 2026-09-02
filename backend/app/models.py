@@ -2,9 +2,9 @@ from datetime import datetime
 from sqlalchemy import Column, Integer, String, Float, Text, DateTime, Boolean
 from app.database import Base
 
-
 class SafetyLog(Base):
     __tablename__ = "safety_logs"
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -56,6 +56,7 @@ class SafetyLog(Base):
 
 class CustomRule(Base):
     __tablename__ = "custom_rules"
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -70,6 +71,7 @@ class CustomRule(Base):
 
 class ParentProfile(Base):
     __tablename__ = "parent_profile"
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True)
     profile_name = Column(String(255), default="Child Companion Profile")

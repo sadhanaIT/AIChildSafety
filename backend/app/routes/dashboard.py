@@ -1,45 +1,39 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import SafetyLog
 
-router = APIRouter(prefix="/api/v1/dashboard", tags=["Parent Dashboard"])
+router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
+@router.get("/metrics")
+def get_dashboard_metrics(db: Session = Depends(get_db)):
+    total_interactions = db.query(SafetyLog).count()
+    warnings_count = db.query(SafetyLog).filter(SafetyLog.decision == "WARN").count()
+    blocked_count = db.query(SafetyLog).filter(SafetyLog.decision == "BLOCK").count()
 
-@router.get("/logs", status_code=status.HTTP_200_OK)
-def get_safety_logs(db: Session = Depends(get_db)):
-    try:
-        logs = db.query(SafetyLog).order_by(SafetyLog.timestamp.desc()).all()
+    recent_alerts = (
+        db.query(SafetyLog)
+        .filter(SafetyLog.decision.in_(["WARN", "BLOCK"]))
+        .order_by(SafetyLog.id.desc())
+        .limit(5)
+        .all()
+    )
 
-        # Calculate summary metrics for the parent dashboard
-        total_messages = len(logs)
-        blocked_count = sum(1 for log in logs if log.decision == "BLOCK")
-        warning_count = sum(1 for log in logs if log.decision == "WARN")
-        avg_risk = sum(log.risk_score for log in logs) / total_messages if total_messages > 0 else 0.0
-
-        formatted_logs = [
-            {
-                "id": log.id,
-                "timestamp": str(log.timestamp),
-                "child_message": log.child_message,
-                "ai_response": log.ai_response,
-                "age_group": log.age_group,
-                "emotion": log.emotion,
-                "risk_score": log.risk_score,
-                "decision": log.decision,
-                "pii_detected": log.pii_detected
-            }
-            for log in logs
-        ]
-
-        return {
-            "metrics": {
-                "total_messages": total_messages,
-                "blocked_count": blocked_count,
-                "warning_count": warning_count,
-                "average_risk_score": round(avg_risk, 2)
-            },
-            "logs": formatted_logs
+    formatted_alerts = [
+        {
+            "id": alert.id,
+            "timestamp": alert.timestamp.strftime("%H:%M:%S"),
+            "child_input": alert.child_message,
+            "detected_emotion": alert.emotion or "neutral",
+            "safety_status": alert.decision,
+            "risk_score": alert.risk_score
         }
-    except Exception as e:
-        return {"error": str(e), "logs": [], "metrics": {}}
+        for alert in recent_alerts
+    ]
+
+    return {
+        "total_interactions": total_interactions,
+        "warnings_count": warnings_count,
+        "blocked_count": blocked_count,
+        "recent_alerts": formatted_alerts
+    }

@@ -26,15 +26,18 @@ def evaluate_harm_and_emotion(text: str) -> dict:
     try:
         # Run Harm/Toxicity Detection
         harm_result = harm_classifier(text)[0]
-        harm_score = harm_result['score'] if harm_result['label'].lower() in ['toxic', 'severe_toxic', 'obscene',
-                                                                              'threat', 'insult',
-                                                                              'identity_hate'] else 0.0
+        label = harm_result['label'].lower()
+        score = float(harm_result['score'])
 
-        # If model label is 'toxic' or similar, use its confidence score, else keep it low
-        if harm_result['label'].lower() != 'neutral' and harm_result['score'] > 0.5:
-            harm_score = harm_result['score']
+        # Toxic-bert labels: toxic, severe_toxic, obscene, threat, insult, identity_hate.
+        # If the detected label is one of these and confidence is high, assign the score.
+        # Otherwise, treat normal text as safe (low baseline score).
+        toxic_labels = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+
+        if label in toxic_labels and score > 0.4:
+            harm_score = score
         else:
-            harm_score = 0.05
+            harm_score = 0.01
 
         # Run Emotion Detection
         emotion_result = emotion_classifier(text)[0]
