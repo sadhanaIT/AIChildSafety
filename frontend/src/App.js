@@ -17,6 +17,53 @@ function App() {
   const [activeTab, setActiveTab] = useState("chat");
 
   // ==========================================================
+  // AUTHENTICATION STATE (Resets on refresh by using local state)
+  // ==========================================================
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await fetch("http://localhost:8000/api/v1/profile/verify-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: passwordInput })
+      });
+
+      if (response.ok) {
+        setIsAuthenticated(true);
+        setErrorMsg("");
+      } else {
+        setErrorMsg("Incorrect password. Default is 1234.");
+      }
+    } catch (err) {
+      setErrorMsg("Failed to connect to backend server.");
+    }
+  };
+
+  const renderPasswordGate = () => (
+    <div style={{ maxWidth: 400, margin: "80px auto", padding: 30, background: "#fff", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", textAlign: "center" }}>
+      <h2 style={{ color: "#000", marginBottom: "10px" }}>Parent Access Required</h2>
+      <p style={{ color: "#666", fontSize: 14, marginBottom: "20px" }}>Please enter your guardian password to view analytics and rules.</p>
+      <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <input
+          type="password"
+          placeholder="Enter password"
+          value={passwordInput}
+          onChange={(e) => setPasswordInput(e.target.value)}
+          style={{ padding: 10, borderRadius: 4, border: "1px solid #ccc", fontSize: 16 }}
+        />
+        <button type="submit" style={{ padding: 10, background: "#0066cc", color: "#fff", border: "none", borderRadius: 4, fontWeight: "bold", cursor: "pointer" }}>
+          Unlock Dashboard
+        </button>
+        {errorMsg && <span style={{ color: "#dc2626", fontSize: 13, marginTop: 4 }}>{errorMsg}</span>}
+      </form>
+    </div>
+  );
+
+  // ==========================================================
   // STATE
   // ==========================================================
 
@@ -466,9 +513,9 @@ function App() {
       </nav>
 
       {activeTab === 'dashboard' ? (
-        <ParentDashboard />
+        isAuthenticated ? <ParentDashboard /> : renderPasswordGate()
       ) : activeTab === 'profile' ? (
-        <Profile />
+        isAuthenticated ? <Profile /> : renderPasswordGate()
       ) : (
         <>
           {/* ====================================================

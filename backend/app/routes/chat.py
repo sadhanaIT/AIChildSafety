@@ -910,6 +910,9 @@ async def process_chat_message(
     # 3. CUSTOM GUARDIAN RULES
     # ========================================================
 
+    custom_rule_triggered = False
+    triggered_keyword = None
+
     if has_text:
 
         try:
@@ -938,111 +941,28 @@ async def process_chat_message(
                     continue
 
                 if keyword in message_lower:
-
                     print(
-                        "Custom Guardian Rule matched:",
+                        "Custom Guardian Rule matched (WARN mode):",
                         keyword,
                     )
 
-                    decision = "BLOCK"
-                    risk_score = 1.0
+                    custom_rule_triggered = True
+                    triggered_keyword = keyword
+                    decision = "WARN"
+                    risk_score = 0.60
 
                     reason = (
                         "Custom guardian safety "
-                        "rule was triggered."
-                    )
-
-                    emotion = (
-                        "not_evaluated"
-                    )
-
-                    emotion_confidence = 0.0
-
-                    emotion_confidence_level = (
-                        "NOT_EVALUATED"
-                    )
-
-                    ai_response_text = (
-                        "This message has been "
-                        "blocked by your guardian's "
-                        "custom safety rules."
+                        "rule was triggered (Warning issued)."
                     )
 
                     warning_message = (
-                        "A guardian-configured "
-                        "safety rule blocked this content."
+                        f"Notice: A guardian-configured keyword ('{keyword}') was detected in this message."
                     )
-
-                    total_time = (
-                        perf_counter()
-                        - request_start
-                    )
-
-                    log_id = _save_safety_log(
-                        db=db,
-
-                        child_message=(
-                            "[BLOCKED BY CUSTOM RULE]"
-                        ),
-
-                        ai_response=(
-                            ai_response_text
-                        ),
-
-                        age_group=age_group,
-
-                        emotion=emotion,
-
-                        risk_score=1.0,
-
-                        decision="BLOCK",
-
-                        pii_summary=(
-                            "CUSTOM_RULE"
-                        ),
-                    )
-
-                    return _build_response(
-                        decision="BLOCK",
-                        risk_score=1.0,
-                        emotion=emotion,
-                        emotion_confidence=0.0,
-                        emotion_confidence_level=(
-                            "NOT_EVALUATED"
-                        ),
-                        pii_results=[],
-                        response=ai_response_text,
-                        warning=warning_message,
-                        reason=reason,
-                        harm_score=0.0,
-                        harmful_intent=False,
-                        harmful_intent_type=None,
-                        harmful_intent_score=0.0,
-                        image_risk=0.0,
-                        image_tags=[],
-                        image_status="ALLOW",
-                        image_category="not_analyzed",
-                        image_reason=None,
-                        image_pii=[],
-                        llm_called=False,
-                        processing_time=total_time,
-                        log_id=log_id,
-                    )
+                    break
 
         except Exception as rule_error:
-
-            print(
-                "Custom rule check error:",
-                rule_error,
-            )
-
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Safety rule verification "
-                    "failed. Please try again."
-                ),
-            )
+            ...
 
     # ========================================================
     # 4. READ + VALIDATE IMAGE
@@ -1795,125 +1715,128 @@ async def process_chat_message(
                 log_id=log_id,
             )
 
-    # ========================================================
-    # 10. FINAL RISK CALCULATION
-    # ========================================================
-
-    print(
-        "\nCalculating final safety risk..."
-    )
-
-    try:
+        # ========================================================
+        # 10. FINAL RISK CALCULATION
+        # ========================================================
 
         try:
 
-            # New risk calculator.
-            safety_evaluation = (
-                calculate_risk_score(
-                    harm_score=harm_score,
+            try:
 
-                    pii_detected=bool(
-                        pii_results
-                    ),
+                # New risk calculator.
+                safety_evaluation = (
+                    calculate_risk_score(
+                        harm_score=harm_score,
 
-                    age_category=age_group,
+                        pii_detected=bool(
+                            pii_results
+                        ),
 
-                    image_risk_score=image_risk,
+                        age_category=age_group,
 
-                    pii_details=pii_results,
+                        image_risk_score=image_risk,
 
-                    harmful_intent=harmful_intent,
+                        pii_details=pii_results,
 
-                    image_pii_details=image_pii,
+                        harmful_intent=harmful_intent,
+
+                        image_pii_details=image_pii,
+                    )
+                )
+
+            except TypeError:
+
+                # Backward-compatible call for an older
+                # risk calculator.
+                safety_evaluation = (
+                    calculate_risk_score(
+                        harm_score=harm_score,
+
+                        pii_detected=bool(
+                            pii_results
+                        ),
+
+                        age_category=age_group,
+
+                        image_risk_score=image_risk,
+
+                        pii_details=pii_results,
+
+                        harmful_intent=harmful_intent,
+                    )
+                )
+
+            if not isinstance(
+                    safety_evaluation,
+                    dict,
+            ):
+                raise RuntimeError(
+                    "Invalid risk calculation result."
+                )
+
+            risk_score = _clamp(
+                safety_evaluation.get(
+                    "risk_score",
+                    1.0,
                 )
             )
 
-        except TypeError:
-
-            # Backward-compatible call for an older
-            # risk calculator.
-            safety_evaluation = (
-                calculate_risk_score(
-                    harm_score=harm_score,
-
-                    pii_detected=bool(
-                        pii_results
-                    ),
-
-                    age_category=age_group,
-
-                    image_risk_score=image_risk,
-
-                    pii_details=pii_results,
-
-                    harmful_intent=harmful_intent,
-                )
-            )
-
-        if not isinstance(
-            safety_evaluation,
-            dict,
-        ):
-
-            raise RuntimeError(
-                "Invalid risk calculation result."
-            )
-
-        risk_score = _clamp(
-            safety_evaluation.get(
-                "risk_score",
-                1.0,
-            )
-        )
-
-        decision = _safe_string(
-            safety_evaluation.get(
-                "decision",
+            decision = _safe_string(
+                safety_evaluation.get(
+                    "decision",
+                    "BLOCK",
+                ),
                 "BLOCK",
-            ),
-            "BLOCK",
-        ).upper()
+            ).upper()
 
-        if decision not in {
-            "ALLOW",
-            "WARN",
-            "BLOCK",
-        }:
+            if decision not in {
+                "ALLOW",
+                "WARN",
+                "BLOCK",
+            }:
 
-            decision = "BLOCK"
+                decision = "BLOCK"
+
+                risk_score = 1.0
+
+                reason = (
+                    "Safety system returned "
+                    "an invalid decision."
+                )
+
+            else:
+
+                reason = _safe_string(
+                    safety_evaluation.get(
+                        "reason",
+                        "Safety decision generated.",
+                    ),
+                    "Safety decision generated.",
+                )
+
+        except Exception as risk_error:
+
+            print(
+                "Risk calculation failed:",
+                risk_error,
+            )
 
             risk_score = 1.0
+            decision = "BLOCK"
 
             reason = (
-                "Safety system returned "
-                "an invalid decision."
+                "Safety risk calculation "
+                "could not be completed."
             )
 
-        else:
-
-            reason = _safe_string(
-                safety_evaluation.get(
-                    "reason",
-                    "Safety decision generated.",
-                ),
-                "Safety decision generated.",
-            )
-
-    except Exception as risk_error:
-
-        print(
-            "Risk calculation failed:",
-            risk_error,
-        )
-
-        risk_score = 1.0
-        decision = "BLOCK"
-
-        reason = (
-            "Safety risk calculation "
-            "could not be completed."
-        )
-
+            # ========================================================
+            # FORCE WARN OVERRIDE FOR CUSTOM RULES
+            # ========================================================
+        if custom_rule_triggered:
+            decision = "WARN"
+            risk_score = max(risk_score, 0.60)
+            reason = f"Custom guardian safety rule triggered for keyword: '{triggered_keyword}'."
+            warning_message = f"Notice: A guardian-configured keyword ('{triggered_keyword}') was detected in this message."
     # ========================================================
     # 11. CRITICAL IMAGE PII OVERRIDE
     #
@@ -2635,43 +2558,42 @@ async def process_chat_message(
                 )
             )
 
-    # ========================================================
-    # 20. DATABASE LOGGING
-    # ========================================================
+        # ========================================================
+        # 20. DATABASE LOGGING
+        # ========================================================
 
-    if decision in {
-        "WARN",
-        "BLOCK",
-    }:
+        if decision in {
+            "WARN",
+            "BLOCK",
+        }:
+            log_id = _save_safety_log(
+                db=db,
 
-        log_id = _save_safety_log(
-            db=db,
+                child_message=(
+                    _prepare_log_message(
+                        user_message,
+                        pii_results,
+                    )
+                    if has_text
+                    else "[IMAGE UPLOAD]"
+                ),
 
-            child_message=(
-                _prepare_log_message(
-                    user_message,
-                    pii_results,
-                )
-                if has_text
-                else "[IMAGE UPLOAD]"
-            ),
+                ai_response=(
+                    ai_response_text
+                    if decision != "BLOCK"
+                    else "[AI RESPONSE BLOCKED]"
+                ),
 
-            ai_response=(
-                ai_response_text
-                if decision != "BLOCK"
-                else "[AI RESPONSE BLOCKED]"
-            ),
+                age_group=age_group,
 
-            age_group=age_group,
+                emotion=emotion,
 
-            emotion=emotion,
+                risk_score=risk_score,
 
-            risk_score=risk_score,
+                decision=decision,
 
-            decision=decision,
-
-            pii_summary=pii_summary,
-        )
+                pii_summary=pii_summary,
+            )
 
     # ========================================================
     # 21. FINAL RESPONSE

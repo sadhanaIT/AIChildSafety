@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react';
 
 export default function ParentDashboard() {
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    sessionStorage.getItem("parent_auth") === "true"
+  );
+  const [passwordInput, setPasswordInput] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
+
   const [metrics, setMetrics] = useState({
     total_interactions: 0,
     warnings_count: 0,
@@ -21,11 +27,56 @@ export default function ParentDashboard() {
   };
 
   useEffect(() => {
-    fetchDashboardData();
-    // Poll every 5 seconds to update the feed in real-time
-    const interval = setInterval(fetchDashboardData, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    if (isAuthenticated) {
+      fetchDashboardData();
+      // Poll every 5 seconds to update the feed in real-time
+      const interval = setInterval(fetchDashboardData, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [isAuthenticated]);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await fetch("http://localhost:8000/api/v1/profile/verify-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: passwordInput })
+      });
+
+      if (response.ok) {
+        sessionStorage.setItem("parent_auth", "true");
+        setIsAuthenticated(true);
+        setErrorMsg("");
+      } else {
+        setErrorMsg("Incorrect password. Default is 1234.");
+      }
+    } catch (err) {
+      setErrorMsg("Failed to connect to backend server.");
+    }
+  };
+
+  if (!isAuthenticated) {
+    return (
+      <div style={{ maxWidth: 400, margin: "80px auto", padding: 30, background: "#fff", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", textAlign: "center" }}>
+        <h2>Parent Access Required</h2>
+        <p style={{ color: "#666", fontSize: 14 }}>Please enter your guardian password to view analytics and rules.</p>
+        <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 20 }}>
+          <input
+            type="password"
+            placeholder="Enter Password"
+            value={passwordInput}
+            onChange={(e) => setPasswordInput(e.target.value)}
+            style={{ padding: 10, borderRadius: 4, border: "1px solid #ccc", fontSize: 16 }}
+          />
+          <button type="submit" style={{ padding: 10, background: "#0066cc", color: "#fff", border: "none", borderRadius: 4, fontWeight: "bold", cursor: "pointer" }}>
+            Unlock Dashboard
+          </button>
+          {errorMsg && <span style={{ color: "#dc2626", fontSize: 13 }}>{errorMsg}</span>}
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth: 800, margin: "0 auto", padding: 20 }}>

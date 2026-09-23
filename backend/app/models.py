@@ -77,3 +77,4 @@ class ParentProfile(Base):
     profile_name = Column(String(255), default="Child Companion Profile")
     sensitivity = Column(String(100), default="High (Strict PII & Toxicity Block)")
     notifications_enabled = Column(Boolean, default=True)
+    password = Column(String(255), default="1234")  # Default password for testing
