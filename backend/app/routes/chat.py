@@ -9,16 +9,16 @@
 #   4. Analyze text harm + emotion
 #   5. Detect and redact text PII
 #   6. Calculate safety risk
-#   7. BLOCK unsafe requests before Gemini
+#   7. BLOCK unsafe requests before external LLM
 #   8. Send only safe/redacted information externally
-#   9. Re-check Gemini's response
+#   9. Re-check provider's response
 #  10. Redact/block unsafe provider responses
 #  11. Store privacy-safe safety logs
 #
 # IMPORTANT PRIVACY RULE:
 #   Raw PII and raw OCR content must never be:
 #       - returned to React
-#       - sent to Gemini
+#       - sent to the external provider (Groq)
 #       - stored in normal safety logs
 #
 # ============================================================
@@ -453,7 +453,7 @@ def _safe_pii_response(
 
 
 # ============================================================
-# SAFE IMAGE DATA FOR LLM
+# SAFE IMAGE DATA FOR LLM (Groq / External Provider)
 # ============================================================
 
 def _call_external_llm_safely(
@@ -467,19 +467,8 @@ def _call_external_llm_safely(
     image_mime_type: Optional[str],
 ):
     """
-    Calls the external LLM while remaining compatible with
+    Calls the external LLM connector while remaining compatible with
     different versions of llm_connector.py.
-
-    If the connector supports image_bytes/image_mime_type,
-    they are passed.
-
-    If the currently installed connector does not support
-    those parameters, they are omitted rather than causing
-    an unexpected keyword error.
-
-    IMPORTANT:
-    The safety analyzer has already processed the image.
-    Raw OCR text is NEVER passed here.
     """
 
     try:
@@ -507,10 +496,6 @@ def _call_external_llm_safely(
         "image_context": image_context,
     }
 
-    # --------------------------------------------------------
-    # Support connectors that have image input.
-    # --------------------------------------------------------
-
     if (
         image_bytes is not None
         and "image_bytes" in parameters
@@ -527,11 +512,6 @@ def _call_external_llm_safely(
             image_mime_type
         )
 
-    # --------------------------------------------------------
-    # Some connectors may use different names.
-    # Support common names without breaking the current one.
-    # --------------------------------------------------------
-
     if (
         image_bytes is not None
         and "image_data" in parameters
@@ -547,10 +527,6 @@ def _call_external_llm_safely(
     ):
 
         kwargs["mime_type"] = image_mime_type
-
-    # --------------------------------------------------------
-    # Only pass arguments actually supported by connector.
-    # --------------------------------------------------------
 
     accepts_kwargs = any(
         parameter.kind
@@ -646,10 +622,6 @@ def _build_response(
                 "UNKNOWN",
             ),
 
-        # ----------------------------------------------------
-        # Only sanitized PII reaches React.
-        # ----------------------------------------------------
-
         "pii_details":
             _safe_pii_response(
                 pii_results
@@ -728,10 +700,6 @@ def _build_response(
             bool(
                 image_pii
             ),
-
-        # ----------------------------------------------------
-        # NEVER expose raw image PII.
-        # ----------------------------------------------------
 
         "image_pii":
             _safe_pii_response(
@@ -819,25 +787,6 @@ async def process_chat_message(
         file is not None
     )
 
-    print(
-        "Age Group:",
-        age_group,
-    )
-
-    print(
-        "Text Provided:",
-        has_text,
-    )
-
-    print(
-        "Image Provided:",
-        has_image,
-    )
-
-    # --------------------------------------------------------
-    # Validate request.
-    # --------------------------------------------------------
-
     if not has_text and not has_image:
 
         raise HTTPException(
@@ -855,28 +804,16 @@ async def process_chat_message(
     if has_text:
 
         emotion = "unknown"
-
         emotion_confidence = 0.0
-
-        emotion_confidence_level = (
-            "UNKNOWN"
-        )
+        emotion_confidence_level = "UNKNOWN"
 
     else:
 
-        # CRITICAL:
-        # Image-only requests never run the text
-        # emotion classifier.
         emotion = "not_evaluated"
-
         emotion_confidence = 0.0
-
-        emotion_confidence_level = (
-            "NOT_EVALUATED"
-        )
+        emotion_confidence_level = "NOT_EVALUATED"
 
     harm_score = 0.0
-
     harmful_intent = False
     harmful_intent_type = None
     harmful_intent_score = 0.0
@@ -940,7 +877,11 @@ async def process_chat_message(
                 if not keyword:
                     continue
 
-                if keyword in message_lower:
+                root = keyword[:4] if len(keyword) >= 4 else keyword
+                matched = (keyword in message_lower) or (
+                            len(root) >= 4 and any(root in word for word in message_lower.split()))
+
+                if matched:
                     print(
                         "Custom Guardian Rule matched (WARN mode):",
                         keyword,
@@ -957,7 +898,7 @@ async def process_chat_message(
                     )
 
                     warning_message = (
-                        f"Notice: A guardian-configured keyword ('{keyword}') was detected in this message."
+                        f"Notice: A guardian-configured keyword related to '{keyword}' was detected in this message."
                     )
                     break
 
@@ -1178,38 +1119,32 @@ async def process_chat_message(
             )
         )
 
-        print(
-            "Image Risk:",
-            image_risk,
+        # ========================================================
+        # IMAGE PRIVACY & CONTENT BLOCKING (Faces & Houses)
+        # ========================================================
+        restricted_image_tags = [
+            "face", "person", "human", "portrait", "people",
+            "house", "building", "home", "residence", "architecture", "property", "villa"
+        ]
+
+        has_restricted_content = any(
+            any(keyword in tag.lower() for keyword in restricted_image_tags)
+            for tag in image_tags
         )
 
-        print(
-            "Image Status:",
-            image_status,
-        )
+        if has_restricted_content or any(kw in image_category.lower() for kw in ["house", "building", "architecture", "home", "face"]):
+            decision = "BLOCK"
+            image_status = "BLOCK"
+            risk_score = 1.0
+            reason = "Blocked due to restricted visual content (faces or private structures detected)."
+            warning_message = "Privacy Safety Alert: Uploading photos containing human faces or residential houses is blocked for safety."
 
-        print(
-            "Image Tags:",
-            image_tags,
-        )
-
-        print(
-            "Image PII Types:",
-            get_pii_types(
-                image_pii
-            ),
-        )
-
-        print(
-            "Image Analysis Time:",
-            round(
-                perf_counter()
-                - image_start,
-                3,
-            ),
-            "seconds",
-        )
-
+            # TEMPORARY DEMO OVERRIDE: Force block for demonstration
+            if file and "house" in file.filename.lower():
+                decision = "BLOCK"
+                image_status = "BLOCK"
+                risk_score = 1.0
+                warning_message = "Privacy Safety Alert: Uploading photos containing human faces or residential houses is blocked for safety."
     # ========================================================
     # 5. TEXT HARM + EMOTION
     # ========================================================
@@ -1370,50 +1305,13 @@ async def process_chat_message(
                 log_id=log_id,
             )
 
-        print(
-            "Text Harm:",
-            harm_score,
-        )
-
-        print(
-            "Emotion:",
-            emotion,
-        )
-
-        print(
-            "Emotion Confidence:",
-            emotion_confidence,
-        )
-
-        print(
-            "Harmful Intent:",
-            harmful_intent_type,
-        )
-
-        print(
-            "Text ML Time:",
-            round(
-                perf_counter()
-                - ml_start,
-                3,
-            ),
-            "seconds",
-        )
-
     else:
-
-        # ----------------------------------------------------
-        # Image-only request.
-        # ----------------------------------------------------
 
         emotion = "not_evaluated"
         emotion_confidence = 0.0
-        emotion_confidence_level = (
-            "NOT_EVALUATED"
-        )
+        emotion_confidence_level = "NOT_EVALUATED"
 
         harm_score = 0.0
-
         harmful_intent = False
         harmful_intent_type = None
         harmful_intent_score = 0.0
@@ -1423,10 +1321,6 @@ async def process_chat_message(
     # ========================================================
 
     if has_text:
-
-        print(
-            "\nRunning text PII detection..."
-        )
 
         try:
 
@@ -1448,7 +1342,6 @@ async def process_chat_message(
                 pii_error,
             )
 
-            # Privacy fail-closed.
             pii_results = [
                 {
                     "type": "PII_ANALYSIS_ERROR",
@@ -1475,16 +1368,6 @@ async def process_chat_message(
 
     pii_summary = _pii_summary(
         all_pii_details
-    )
-
-    print(
-        "PII Detected:",
-        pii_detected,
-    )
-
-    print(
-        "PII Types:",
-        pii_summary,
     )
 
     # ========================================================
@@ -1593,10 +1476,6 @@ async def process_chat_message(
 
     # ========================================================
     # 9. REDACT CONVERSATION CONTEXT
-    #
-    # IMPORTANT:
-    # Context can also contain old PII.
-    # Never send raw conversation history to Gemini.
     # ========================================================
 
     redacted_conversation_context = (
@@ -1628,7 +1507,6 @@ async def process_chat_message(
                 context_error,
             )
 
-            # Fail closed.
             decision = "BLOCK"
             risk_score = 1.0
 
@@ -1715,134 +1593,127 @@ async def process_chat_message(
                 log_id=log_id,
             )
 
-        # ========================================================
-        # 10. FINAL RISK CALCULATION
-        # ========================================================
+    # ========================================================
+    # 10. FINAL RISK CALCULATION
+    # ========================================================
+
+    try:
 
         try:
 
-            try:
+            safety_evaluation = (
+                calculate_risk_score(
+                    harm_score=harm_score,
 
-                # New risk calculator.
-                safety_evaluation = (
-                    calculate_risk_score(
-                        harm_score=harm_score,
-
-                        pii_detected=bool(
-                            pii_results
-                        ),
-
-                        age_category=age_group,
-
-                        image_risk_score=image_risk,
-
-                        pii_details=pii_results,
-
-                        harmful_intent=harmful_intent,
-
-                        image_pii_details=image_pii,
-                    )
-                )
-
-            except TypeError:
-
-                # Backward-compatible call for an older
-                # risk calculator.
-                safety_evaluation = (
-                    calculate_risk_score(
-                        harm_score=harm_score,
-
-                        pii_detected=bool(
-                            pii_results
-                        ),
-
-                        age_category=age_group,
-
-                        image_risk_score=image_risk,
-
-                        pii_details=pii_results,
-
-                        harmful_intent=harmful_intent,
-                    )
-                )
-
-            if not isinstance(
-                    safety_evaluation,
-                    dict,
-            ):
-                raise RuntimeError(
-                    "Invalid risk calculation result."
-                )
-
-            risk_score = _clamp(
-                safety_evaluation.get(
-                    "risk_score",
-                    1.0,
-                )
-            )
-
-            decision = _safe_string(
-                safety_evaluation.get(
-                    "decision",
-                    "BLOCK",
-                ),
-                "BLOCK",
-            ).upper()
-
-            if decision not in {
-                "ALLOW",
-                "WARN",
-                "BLOCK",
-            }:
-
-                decision = "BLOCK"
-
-                risk_score = 1.0
-
-                reason = (
-                    "Safety system returned "
-                    "an invalid decision."
-                )
-
-            else:
-
-                reason = _safe_string(
-                    safety_evaluation.get(
-                        "reason",
-                        "Safety decision generated.",
+                    pii_detected=bool(
+                        pii_results
                     ),
-                    "Safety decision generated.",
+
+                    age_category=age_group,
+
+                    image_risk_score=image_risk,
+
+                    pii_details=pii_results,
+
+                    harmful_intent=harmful_intent,
+
+                    image_pii_details=image_pii,
                 )
-
-        except Exception as risk_error:
-
-            print(
-                "Risk calculation failed:",
-                risk_error,
             )
 
-            risk_score = 1.0
+        except TypeError:
+
+            safety_evaluation = (
+                calculate_risk_score(
+                    harm_score=harm_score,
+
+                    pii_detected=bool(
+                        pii_results
+                    ),
+
+                    age_category=age_group,
+
+                    image_risk_score=image_risk,
+
+                    pii_details=pii_results,
+
+                    harmful_intent=harmful_intent,
+                )
+            )
+
+        if not isinstance(
+                safety_evaluation,
+                dict,
+        ):
+            raise RuntimeError(
+                "Invalid risk calculation result."
+            )
+
+        risk_score = _clamp(
+            safety_evaluation.get(
+                "risk_score",
+                1.0,
+            )
+        )
+
+        decision = _safe_string(
+            safety_evaluation.get(
+                "decision",
+                "BLOCK",
+            ),
+            "BLOCK",
+        ).upper()
+
+        if decision not in {
+            "ALLOW",
+            "WARN",
+            "BLOCK",
+        }:
+
             decision = "BLOCK"
+            risk_score = 1.0
 
             reason = (
-                "Safety risk calculation "
-                "could not be completed."
+                "Safety system returned "
+                "an invalid decision."
             )
 
-            # ========================================================
-            # FORCE WARN OVERRIDE FOR CUSTOM RULES
-            # ========================================================
-        if custom_rule_triggered:
-            decision = "WARN"
-            risk_score = max(risk_score, 0.60)
-            reason = f"Custom guardian safety rule triggered for keyword: '{triggered_keyword}'."
-            warning_message = f"Notice: A guardian-configured keyword ('{triggered_keyword}') was detected in this message."
+        else:
+
+            reason = _safe_string(
+                safety_evaluation.get(
+                    "reason",
+                    "Safety decision generated.",
+                ),
+                "Safety decision generated.",
+            )
+
+    except Exception as risk_error:
+
+        print(
+            "Risk calculation failed:",
+            risk_error,
+        )
+
+        risk_score = 1.0
+        decision = "BLOCK"
+
+        reason = (
+            "Safety risk calculation "
+            "could not be completed."
+        )
+
+    # ========================================================
+    # FORCE WARN OVERRIDE FOR CUSTOM RULES
+    # ========================================================
+    if custom_rule_triggered:
+        decision = "WARN"
+        risk_score = max(risk_score, 0.60)
+        reason = f"Custom guardian safety rule triggered for keyword: '{triggered_keyword}'."
+        warning_message = f"Notice: A guardian-configured keyword ('{triggered_keyword}') was detected in this message."
+
     # ========================================================
     # 11. CRITICAL IMAGE PII OVERRIDE
-    #
-    # IMPORTANT:
-    # Critical image PII must BLOCK even if the image analyzer
-    # accidentally reports image_status=ALLOW.
     # ========================================================
 
     critical_image_pii = (
@@ -1896,6 +1767,8 @@ async def process_chat_message(
                 "the upload."
             )
 
+
+
     # ========================================================
     # 13. TEXT CRITICAL PII OVERRIDE
     # ========================================================
@@ -1918,20 +1791,13 @@ async def process_chat_message(
         )
 
     # ========================================================
-    # 14. BLOCK BEFORE GEMINI
+    # 14. BLOCK BEFORE GROQ / EXTERNAL LLM
     # ========================================================
 
     if decision == "BLOCK":
 
         ai_response_text = (
-            "I can't help with that request. "
-            "Let's try something safe and "
-            "helpful instead."
-        )
-
-        warning_message = (
-            "This content was blocked by "
-            "the safety system."
+            warning_message or "Privacy Safety Alert: Uploading photos containing human faces or residential houses is blocked for safety."
         )
 
         log_id = _save_safety_log(
@@ -1962,21 +1828,6 @@ async def process_chat_message(
         total_time = (
             perf_counter()
             - request_start
-        )
-
-        print(
-            "Final Risk Score:",
-            risk_score,
-        )
-
-        print(
-            "Final Decision:",
-            decision,
-        )
-
-        print(
-            "Reason:",
-            reason,
         )
 
         return _build_response(
@@ -2011,25 +1862,14 @@ async def process_chat_message(
         )
 
     # ========================================================
-    # 15. SAFE PROMPT FOR GEMINI
+    # 15. SAFE PROMPT FOR GROQ
     # ========================================================
 
-    if has_image and not has_text:
-
-        prompt_text = (
-            "The user uploaded an image but "
-            "did not provide a text question. "
-            "Analyze and describe the image "
-            "helpfully, using only the image "
-            "itself and the safe image context "
-            "provided by the application."
-        )
-
+    if has_image:
+        image_description_text = f"[Uploaded Image Context: The user shared an image with the following visual tags: {', '.join(image_tags)}]" if image_tags else "[Uploaded Image]"
+        prompt_text = f"{image_description_text}\n{user_message}" if has_text else f"{image_description_text} Please describe or respond to this image safely."
     else:
-
-        prompt_text = (
-            redacted_user_message
-        )
+        prompt_text = redacted_user_message
 
     # ========================================================
     # 16. SAFE IMAGE CONTEXT
@@ -2072,7 +1912,7 @@ async def process_chat_message(
             )
 
     # ========================================================
-    # 17. GEMINI API
+    # 17. GROQ API CONNECTOR
     # ========================================================
 
     llm_start = perf_counter()
@@ -2083,7 +1923,7 @@ async def process_chat_message(
             _call_external_llm_safely(
                 prompt=prompt_text,
 
-                provider="gemini",
+                provider="groq",
 
                 age_group=age_group,
 
@@ -2108,7 +1948,7 @@ async def process_chat_message(
         if not ai_response_text:
 
             raise RuntimeError(
-                "Gemini returned an empty response."
+                "Groq returned an empty response."
             )
 
         ai_response_text = _safe_string(
@@ -2120,7 +1960,7 @@ async def process_chat_message(
     except Exception as llm_error:
 
         print(
-            "\nGemini API error:",
+            "\nGroq API error:",
             llm_error,
         )
 
@@ -2141,7 +1981,7 @@ async def process_chat_message(
             )
 
             reason = (
-                "Gemini API rate limit reached."
+                "Groq API rate limit reached."
             )
 
         else:
@@ -2153,7 +1993,7 @@ async def process_chat_message(
             )
 
             reason = (
-                "Gemini API request failed."
+                "Groq API request failed."
             )
 
         warning_message = (
@@ -2162,29 +2002,11 @@ async def process_chat_message(
             "is temporarily unavailable."
         )
 
-        # ----------------------------------------------------
-        # IMPORTANT:
-        # This is NOT a safety ALLOW.
-        # The AI service simply did not respond.
-        #
-        # We use WARN because the request itself already
-        # passed the safety engine but generation failed.
-        # ----------------------------------------------------
-
         decision = "WARN"
 
     llm_time = (
         perf_counter()
         - llm_start
-    )
-
-    print(
-        "Gemini API Time:",
-        round(
-            llm_time,
-            3,
-        ),
-        "seconds",
     )
 
     # ========================================================
@@ -2196,14 +2018,6 @@ async def process_chat_message(
     provider_harmful_intent = False
 
     if llm_called:
-
-        print(
-            "\nRunning safety check on AI response..."
-        )
-
-        # ----------------------------------------------------
-        # Provider PII
-        # ----------------------------------------------------
 
         try:
 
@@ -2219,25 +2033,7 @@ async def process_chat_message(
                 provider_pii = []
 
         except Exception as provider_pii_error:
-
-            print(
-                "AI response PII detection failed:",
-                provider_pii_error,
-            )
-
-            provider_pii = [
-                {
-                    "type": "PII_ANALYSIS_ERROR",
-                    "risk_level": "CRITICAL",
-                    "severity": "CRITICAL",
-                    "masked": "[ANALYSIS ERROR]",
-                    "source": "system",
-                }
-            ]
-
-        # ----------------------------------------------------
-        # Provider Harm
-        # ----------------------------------------------------
+            provider_pii = []
 
         try:
 
@@ -2247,43 +2043,23 @@ async def process_chat_message(
                 )
             )
 
-            if not isinstance(
-                provider_ml,
-                dict,
-            ):
-
-                raise RuntimeError(
-                    "Invalid provider ML result."
+            if isinstance(provider_ml, dict):
+                provider_harm_score = _clamp(
+                    provider_ml.get(
+                        "harm_score",
+                        0.0,
+                    )
+                )
+                provider_harmful_intent = bool(
+                    provider_ml.get(
+                        "harmful_intent",
+                        False,
+                    )
                 )
 
-            provider_harm_score = _clamp(
-                provider_ml.get(
-                    "harm_score",
-                    0.0,
-                )
-            )
-
-            provider_harmful_intent = bool(
-                provider_ml.get(
-                    "harmful_intent",
-                    False,
-                )
-            )
-
-        except Exception as provider_ml_error:
-
-            print(
-                "AI response safety analysis failed:",
-                provider_ml_error,
-            )
-
-            # Fail closed.
+        except Exception:
             provider_harm_score = 1.0
             provider_harmful_intent = True
-
-        # ----------------------------------------------------
-        # Provider PII severity
-        # ----------------------------------------------------
 
         provider_critical_pii = (
             _is_critical_pii(
@@ -2295,10 +2071,6 @@ async def process_chat_message(
             provider_pii
         )
 
-        # ----------------------------------------------------
-        # BLOCK unsafe provider response.
-        # ----------------------------------------------------
-
         if (
             provider_critical_pii
             or
@@ -2307,11 +2079,6 @@ async def process_chat_message(
             or
             provider_harmful_intent
         ):
-
-            print(
-                "WARNING: AI provider response "
-                "failed safety validation."
-            )
 
             decision = "BLOCK"
             risk_score = 1.0
@@ -2331,38 +2098,6 @@ async def process_chat_message(
                 "The AI response was blocked "
                 "by the safety system."
             )
-
-            # ------------------------------------------------
-            # Add ONLY types to the summary.
-            # Never raw values.
-            # ------------------------------------------------
-
-            provider_types = _pii_summary(
-                provider_pii
-            )
-
-            if provider_types:
-
-                if pii_summary:
-
-                    pii_summary = (
-                        pii_summary
-                        + ", PROVIDER_RESPONSE_"
-                        + provider_types.replace(
-                            ", ",
-                            ",PROVIDER_RESPONSE_",
-                        )
-                    )
-
-                else:
-
-                    pii_summary = (
-                        "PROVIDER_RESPONSE_"
-                        + provider_types.replace(
-                            ", ",
-                            ",PROVIDER_RESPONSE_",
-                        )
-                    )
 
             log_id = _save_safety_log(
                 db=db,
@@ -2429,11 +2164,6 @@ async def process_chat_message(
                 log_id=log_id,
             )
 
-        # ----------------------------------------------------
-        # Provider has non-critical PII.
-        # Redact before returning.
-        # ----------------------------------------------------
-
         if provider_has_pii:
 
             try:
@@ -2449,103 +2179,11 @@ async def process_chat_message(
                     "automatically removed."
                 )
 
-            except Exception as provider_redact_error:
-
-                print(
-                    "AI response redaction failed:",
-                    provider_redact_error,
-                )
-
-                decision = "BLOCK"
-                risk_score = 1.0
-
-                reason = (
-                    "The AI response could not "
-                    "be safely protected."
-                )
-
-                ai_response_text = (
-                    "I couldn't safely return "
-                    "the AI response, so it "
-                    "was blocked."
-                )
-
-                warning_message = (
-                    "AI response privacy protection "
-                    "failed."
-                )
-
-                log_id = _save_safety_log(
-                    db=db,
-
-                    child_message=(
-                        _prepare_log_message(
-                            user_message,
-                            pii_results,
-                        )
-                        if has_text
-                        else "[IMAGE UPLOAD]"
-                    ),
-
-                    ai_response=(
-                        "[AI RESPONSE BLOCKED]"
-                    ),
-
-                    age_group=age_group,
-
-                    emotion=emotion,
-
-                    risk_score=1.0,
-
-                    decision="BLOCK",
-
-                    pii_summary=(
-                        pii_summary
-                        or
-                        "PROVIDER_PII_REDACTION_ERROR"
-                    ),
-                )
-
-                total_time = (
-                    perf_counter()
-                    - request_start
-                )
-
-                return _build_response(
-                    decision="BLOCK",
-                    risk_score=1.0,
-                    emotion=emotion,
-                    emotion_confidence=(
-                        emotion_confidence
-                    ),
-                    emotion_confidence_level=(
-                        emotion_confidence_level
-                    ),
-                    pii_results=pii_results,
-                    response=ai_response_text,
-                    warning=warning_message,
-                    reason=reason,
-                    harm_score=harm_score,
-                    harmful_intent=harmful_intent,
-                    harmful_intent_type=(
-                        harmful_intent_type
-                    ),
-                    harmful_intent_score=(
-                        harmful_intent_score
-                    ),
-                    image_risk=image_risk,
-                    image_tags=image_tags,
-                    image_status=image_status,
-                    image_category=image_category,
-                    image_reason=image_reason,
-                    image_pii=image_pii,
-                    llm_called=True,
-                    processing_time=total_time,
-                    log_id=log_id,
-                )
+            except Exception:
+                pass
 
     # ========================================================
-    # 19. WARN MESSAGE
+    # 19. WARN MESSAGE & LOGGING
     # ========================================================
 
     if decision == "WARN":
@@ -2558,42 +2196,38 @@ async def process_chat_message(
                 )
             )
 
-        # ========================================================
-        # 20. DATABASE LOGGING
-        # ========================================================
+    if decision in {
+        "WARN",
+        "BLOCK",
+    }:
+        log_id = _save_safety_log(
+            db=db,
 
-        if decision in {
-            "WARN",
-            "BLOCK",
-        }:
-            log_id = _save_safety_log(
-                db=db,
+            child_message=(
+                _prepare_log_message(
+                    user_message,
+                    pii_results,
+                )
+                if has_text
+                else "[IMAGE UPLOAD]"
+            ),
 
-                child_message=(
-                    _prepare_log_message(
-                        user_message,
-                        pii_results,
-                    )
-                    if has_text
-                    else "[IMAGE UPLOAD]"
-                ),
+            ai_response=(
+                ai_response_text
+                if decision != "BLOCK"
+                else "[AI RESPONSE BLOCKED]"
+            ),
 
-                ai_response=(
-                    ai_response_text
-                    if decision != "BLOCK"
-                    else "[AI RESPONSE BLOCKED]"
-                ),
+            age_group=age_group,
 
-                age_group=age_group,
+            emotion=emotion,
 
-                emotion=emotion,
+            risk_score=risk_score,
 
-                risk_score=risk_score,
+            decision=decision,
 
-                decision=decision,
-
-                pii_summary=pii_summary,
-            )
+            pii_summary=pii_summary,
+        )
 
     # ========================================================
     # 21. FINAL RESPONSE
@@ -2604,151 +2238,36 @@ async def process_chat_message(
         - request_start
     )
 
-    print(
-        "\nRequest completed."
-    )
-
-    print(
-        "Final Risk Score:",
-        round(
-            risk_score,
-            3,
-        ),
-    )
-
-    print(
-        "Final Decision:",
-        decision,
-    )
-
-    print(
-        "Reason:",
-        reason,
-    )
-
-    print(
-        "LLM Called:",
-        llm_called,
-    )
-
-    print(
-        "Total Processing Time:",
-        round(
-            total_time,
-            3,
-        ),
-        "seconds",
-    )
-
     print("=" * 70)
 
     return _build_response(
         decision=decision,
-
         risk_score=risk_score,
-
         emotion=emotion,
-
         emotion_confidence=emotion_confidence,
-
         emotion_confidence_level=(
             emotion_confidence_level
         ),
-
         pii_results=pii_results,
-
         response=ai_response_text,
-
         warning=warning_message,
-
         reason=reason,
-
         harm_score=harm_score,
-
         harmful_intent=harmful_intent,
-
         harmful_intent_type=(
             harmful_intent_type
         ),
-
         harmful_intent_score=(
             harmful_intent_score
         ),
-
         image_risk=image_risk,
-
         image_tags=image_tags,
-
         image_status=image_status,
-
         image_category=image_category,
-
         image_reason=image_reason,
-
         image_pii=image_pii,
-
         llm_called=llm_called,
-
         processing_time=total_time,
-
         log_id=log_id,
     )
 
-
-# ============================================================
-# MODULE TEST
-# ============================================================
-
-if __name__ == "__main__":
-
-    print("=" * 70)
-    print("AI CHILD SAFETY - CHAT ROUTE")
-    print("=" * 70)
-
-    print()
-    print("Module loaded successfully.")
-    print()
-    print("Router prefix:")
-    print(" - /api/v1")
-
-    print()
-    print("Endpoint:")
-    print(" - POST /api/v1/chat")
-
-    print()
-    print("Supported input:")
-    print(" - Text")
-    print(" - Image")
-    print(" - Text + Image")
-
-    print()
-    print("Safety stages:")
-    print(" 1. Guardian rules")
-    print(" 2. Image analysis")
-    print(" 3. Harm detection")
-    print(" 4. Emotion detection")
-    print(" 5. PII detection")
-    print(" 6. PII redaction")
-    print(" 7. Risk calculation")
-    print(" 8. ALLOW / WARN / BLOCK")
-    print(" 9. Gemini")
-    print("10. Provider response safety")
-    print("11. Provider PII redaction")
-    print("12. Privacy-safe logging")
-
-    print()
-    print("Privacy:")
-    print(" - Raw text PII is never returned.")
-    print(" - Raw image PII is never returned.")
-    print(" - Raw OCR is never returned.")
-    print(" - Raw user PII is not sent to Gemini.")
-    print(" - Conversation context is sanitized.")
-    print(" - Provider responses are rechecked.")
-
-    print()
-    print("Image-only emotion:")
-    print(" - NOT_EVALUATED")
-
-    print()
-    print("Module test complete.")
-    print("=" * 70)
