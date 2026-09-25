@@ -1,94 +1,290 @@
 import React, {
   useState,
   useRef,
-  useEffect
+  useEffect,
+  useCallback
 } from "react";
+
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import "./App.css";
 import ParentDashboard from "./ParentDashboard";
 import Profile from "./Profile";
 
 
+/* ==========================================================
+   API CONFIGURATION
+   ========================================================== */
+
+const API_BASE_URL =
+  "http://localhost:8000";
+
+
+/* ==========================================================
+   SUPPORTED IMAGE TYPES
+   ========================================================== */
+
+const ALLOWED_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp"
+]);
+
+
+/* ==========================================================
+   APP
+   ========================================================== */
+
 function App() {
 
-  // ==========================================================
+  // ========================================================
   // NAVIGATION TAB STATE
-  // ==========================================================
-  const [activeTab, setActiveTab] = useState("chat");
+  // ========================================================
 
-  // ==========================================================
-  // AUTHENTICATION STATE (Resets on refresh by using local state)
-  // ==========================================================
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [passwordInput, setPasswordInput] = useState("");
-  const [errorMsg, setErrorMsg] = useState("");
+  const [activeTab, setActiveTab] =
+    useState("chat");
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    try {
-      const response = await fetch("http://localhost:8000/api/v1/profile/verify-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: passwordInput })
-      });
 
-      if (response.ok) {
-        setIsAuthenticated(true);
-        setErrorMsg("");
-      } else {
-        setErrorMsg("Incorrect password. Default is 1234.");
-      }
-    } catch (err) {
-      setErrorMsg("Failed to connect to backend server.");
-    }
-  };
+  // ========================================================
+  // PARENT AUTHENTICATION
+  // ========================================================
 
-  const renderPasswordGate = () => (
-    <div style={{ maxWidth: 400, margin: "80px auto", padding: 30, background: "#fff", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", textAlign: "center" }}>
-      <h2 style={{ color: "#000", marginBottom: "10px" }}>Parent Access Required</h2>
-      <p style={{ color: "#666", fontSize: 14, marginBottom: "20px" }}>Please enter your guardian password to view analytics and rules.</p>
-      <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <input
-          type="password"
-          placeholder="Enter password"
-          value={passwordInput}
-          onChange={(e) => setPasswordInput(e.target.value)}
-          style={{ padding: 10, borderRadius: 4, border: "1px solid #ccc", fontSize: 16 }}
-        />
-        <button type="submit" style={{ padding: 10, background: "#0066cc", color: "#fff", border: "none", borderRadius: 4, fontWeight: "bold", cursor: "pointer" }}>
-          Unlock Dashboard
-        </button>
-        {errorMsg && <span style={{ color: "#dc2626", fontSize: 13, marginTop: 4 }}>{errorMsg}</span>}
-      </form>
-    </div>
+  const [
+    isAuthenticated,
+    setIsAuthenticated
+  ] = useState(
+    sessionStorage.getItem(
+      "parent_auth"
+    ) === "true"
   );
 
-  // ==========================================================
-  // STATE
-  // ==========================================================
+  const [
+    passwordInput,
+    setPasswordInput
+  ] = useState("");
 
-  const [message, setMessage] = useState("");
+  const [
+    errorMsg,
+    setErrorMsg
+  ] = useState("");
 
-  const [selectedFile, setSelectedFile] =
-    useState(null);
+  const [
+    authLoading,
+    setAuthLoading
+  ] = useState(false);
 
-  const [chatLog, setChatLog] =
-    useState([]);
 
-  const [loading, setLoading] =
-    useState(false);
+  // ========================================================
+  // CHAT STATE
+  // ========================================================
 
-  // General-purpose platform
+  const [
+    message,
+    setMessage
+  ] = useState("");
+
+  const [
+    selectedFile,
+    setSelectedFile
+  ] = useState(null);
+
+  const [
+    chatLog,
+    setChatLog
+  ] = useState([]);
+
+  const [
+    loading,
+    setLoading
+  ] = useState(false);
+
+
+  // ========================================================
+  // AGE GROUP
+  // ========================================================
+
   const [ageGroup] =
     useState("general");
+
+
+  // ========================================================
+  // REFS
+  // ========================================================
 
   const chatEndRef =
     useRef(null);
 
+  const fileInputRef =
+    useRef(null);
 
-  // ==========================================================
+
+  // ========================================================
+  // PARENT LOGIN
+  // ========================================================
+
+  const handleLogin = async (event) => {
+
+    event.preventDefault();
+
+    const password =
+      passwordInput.trim();
+
+    if (!password) {
+
+      setErrorMsg(
+        "Please enter your password."
+      );
+
+      return;
+    }
+
+    if (authLoading) {
+      return;
+    }
+
+    try {
+
+      setAuthLoading(true);
+      setErrorMsg("");
+
+      const response =
+        await fetch(
+          `${API_BASE_URL}/api/v1/profile/verify-password`,
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json",
+
+              Accept:
+                "application/json"
+            },
+
+            body: JSON.stringify({
+              password
+            })
+          }
+        );
+
+      let data = null;
+
+      try {
+
+        data =
+          await response.json();
+
+      } catch {
+
+        data = null;
+
+      }
+
+      if (!response.ok) {
+
+        setErrorMsg(
+          data?.detail ||
+          "Incorrect password."
+        );
+
+        return;
+      }
+
+      sessionStorage.setItem(
+        "parent_auth",
+        "true"
+      );
+
+      setIsAuthenticated(
+        true
+      );
+
+      setPasswordInput("");
+      setErrorMsg("");
+
+    } catch (error) {
+
+      console.error(
+        "Parent authentication error:",
+        error
+      );
+
+      setErrorMsg(
+        "Cannot reach the backend server. Make sure FastAPI is running on port 8000."
+      );
+
+    } finally {
+
+      setAuthLoading(false);
+
+    }
+  };
+
+
+  // ========================================================
+  // PASSWORD GATE
+  // ========================================================
+
+  const renderPasswordGate = () => (
+
+    <div className="password-gate">
+
+      <h2>
+        Parent Access Required
+      </h2>
+
+      <p>
+        Please enter your guardian password
+        to view analytics and safety rules.
+      </p>
+
+      <form
+        onSubmit={handleLogin}
+        className="password-form"
+      >
+
+        <input
+          type="password"
+          placeholder="Enter password"
+          value={passwordInput}
+          onChange={(event) =>
+            setPasswordInput(
+              event.target.value
+            )
+          }
+          disabled={authLoading}
+          autoComplete="current-password"
+        />
+
+        <button
+          type="submit"
+          disabled={authLoading}
+        >
+          {authLoading
+            ? "Verifying..."
+            : "Unlock Dashboard"}
+        </button>
+
+        {errorMsg && (
+
+          <span className="auth-error">
+            {errorMsg}
+          </span>
+
+        )}
+
+      </form>
+
+    </div>
+
+  );
+
+
+  // ========================================================
   // AUTO SCROLL
-  // ==========================================================
+  // ========================================================
 
   useEffect(() => {
 
@@ -96,61 +292,73 @@ function App() {
       behavior: "smooth"
     });
 
-  }, [chatLog, loading]);
+  }, [
+    chatLog,
+    loading
+  ]);
 
 
-  // ==========================================================
+  // ========================================================
   // BUILD CONVERSATION CONTEXT
-  // ==========================================================
+  // ========================================================
 
-  const buildConversationContext = () => {
+  const buildConversationContext =
+    useCallback(() => {
 
-    if (chatLog.length === 0) {
-      return "";
-    }
+      if (
+        chatLog.length === 0
+      ) {
 
-    return chatLog
-      .slice(-10)
-      .map((chat) => {
+        return "";
 
-        const speaker =
-          chat.sender === "child"
-            ? "User"
-            : "Assistant";
+      }
 
-        return `${speaker}: ${chat.text || ""}`;
+      return chatLog
+        .slice(-10)
+        .map((chat) => {
 
-      })
-      .join("\n");
-  };
+          const speaker =
+            chat.sender === "child"
+              ? "User"
+              : "Assistant";
+
+          return `${speaker}: ${
+            chat.text || ""
+          }`;
+
+        })
+        .join("\n");
+
+    }, [chatLog]);
 
 
-  // ==========================================================
+  // ========================================================
   // SEND MESSAGE
-  // ==========================================================
+  // ========================================================
 
-  const sendMessage = async (event) => {
+  const sendMessage = async (
+    event
+  ) => {
 
     event.preventDefault();
-
-    // ----------------------------------------------
-    // Prevent empty requests
-    // ----------------------------------------------
 
     if (
       !message.trim() &&
       !selectedFile
     ) {
+
       return;
+
     }
 
     if (loading) {
       return;
     }
 
-    // ----------------------------------------------
-    // Preserve current values
-    // ----------------------------------------------
+
+    // ======================================================
+    // PRESERVE CURRENT VALUES
+    // ======================================================
 
     const currentMessage =
       message.trim();
@@ -158,65 +366,77 @@ function App() {
     const currentFile =
       selectedFile;
 
-    // ----------------------------------------------
-    // Create local image preview
-    // ----------------------------------------------
+
+    // ======================================================
+    // CREATE IMAGE PREVIEW
+    // ======================================================
 
     const imagePreview =
       currentFile
-        ? URL.createObjectURL(currentFile)
+        ? URL.createObjectURL(
+            currentFile
+          )
         : null;
 
-    // ----------------------------------------------
-    // Build context BEFORE adding current message
-    // ----------------------------------------------
+
+    // ======================================================
+    // BUILD PREVIOUS CONTEXT
+    // ======================================================
 
     const previousContext =
       buildConversationContext();
 
-    // ----------------------------------------------
-    // Add user message immediately
-    //
-    // "child" is intentionally retained as the
-    // internal CSS class for compatibility with
-    // the existing App.css.
-    // ----------------------------------------------
 
-    setChatLog((previous) => [
+    // ======================================================
+    // ADD USER MESSAGE IMMEDIATELY
+    // ======================================================
 
-      ...previous,
+    setChatLog(
+      (previous) => [
 
-      {
-        sender: "child",
+        ...previous,
 
-        text: currentMessage,
+        {
+          sender: "child",
 
-        image: imagePreview,
+          text:
+            currentMessage,
 
-        fileName:
-          currentFile
-            ? currentFile.name
-            : null
-      }
+          image:
+            imagePreview,
 
-    ]);
+          fileName:
+            currentFile
+              ? currentFile.name
+              : null
+        }
 
-    // ----------------------------------------------
-    // Clear input
-    // ----------------------------------------------
+      ]
+    );
+
+
+    // ======================================================
+    // CLEAR INPUT
+    // ======================================================
 
     setMessage("");
-
     setSelectedFile(null);
+
+    if (fileInputRef.current) {
+
+      fileInputRef.current.value =
+        "";
+
+    }
 
     setLoading(true);
 
 
     try {
 
-      // ==================================================
-      // FORM DATA
-      // ==================================================
+      // ====================================================
+      // BUILD FORM DATA
+      // ====================================================
 
       const formData =
         new FormData();
@@ -240,19 +460,20 @@ function App() {
 
         formData.append(
           "file",
-          currentFile
+          currentFile,
+          currentFile.name
         );
 
       }
 
 
-      // ==================================================
+      // ====================================================
       // API REQUEST
-      // ==================================================
+      // ====================================================
 
       const response =
         await fetch(
-          "http://127.0.0.1:8000/api/v1/chat",
+          `${API_BASE_URL}/api/v1/chat`,
           {
             method: "POST",
             body: formData
@@ -260,18 +481,18 @@ function App() {
         );
 
 
-      // ==================================================
-      // READ RESPONSE
-      // ==================================================
+      // ====================================================
+      // READ JSON RESPONSE
+      // ====================================================
 
-      let data;
+      let data = null;
 
       try {
 
         data =
           await response.json();
 
-      } catch (jsonError) {
+      } catch {
 
         throw new Error(
           "Backend returned an invalid response."
@@ -280,9 +501,9 @@ function App() {
       }
 
 
-      // ==================================================
+      // ====================================================
       // HTTP ERROR
-      // ==================================================
+      // ====================================================
 
       if (!response.ok) {
 
@@ -294,55 +515,106 @@ function App() {
       }
 
 
-      // ==================================================
-      // ASSISTANT RESPONSE
-      // ==================================================
+      // ====================================================
+      // ADD ASSISTANT RESPONSE
+      // ====================================================
 
-      setChatLog((previous) => [
+      setChatLog(
+        (previous) => [
 
-        ...previous,
+          ...previous,
 
-        {
-          sender: "ai",
+          {
+            sender: "ai",
 
-          text:
-            data.response ||
-            "I couldn't generate a response right now.",
+            text:
+              data.response ||
+              "I couldn't generate a response right now.",
 
-          status:
-            data.status || "ALLOW",
+            status:
+              data.status ||
+              "ALLOW",
 
-          risk:
-            typeof data.risk_score === "number"
-              ? data.risk_score
-              : 0,
+            risk:
+              typeof data.risk_score ===
+              "number"
+                ? data.risk_score
+                : 0,
 
-          warning:
-            data.warning || null,
+            warning:
+              data.warning ||
+              null,
 
-          emotion:
-            data.emotion || "neutral",
+            reason:
+              data.reason ||
+              null,
 
-          pii:
-            Array.isArray(data.pii_details)
-              ? data.pii_details
-              : [],
+            emotion:
+              data.emotion ||
+              "neutral",
 
-          imageRisk:
-            typeof data.image_risk === "number"
-              ? data.image_risk
-              : 0,
+            emotionConfidence:
+              typeof data.emotion_confidence ===
+              "number"
+                ? data.emotion_confidence
+                : 0,
 
-          imageTags:
-            Array.isArray(data.image_tags)
-              ? data.image_tags
-              : [],
+            emotionConfidenceLevel:
+              data.emotion_confidence_level ||
+              "UNKNOWN",
 
-          logId:
-            data.log_id || null
-        }
+            pii:
+              Array.isArray(
+                data.pii_details
+              )
+                ? data.pii_details
+                : [],
 
-      ]);
+            imageRisk:
+              typeof data.image_risk ===
+              "number"
+                ? data.image_risk
+                : 0,
+
+            imageTags:
+              Array.isArray(
+                data.image_tags
+              )
+                ? data.image_tags
+                : [],
+
+            imageStatus:
+              data.image_status ||
+              "ALLOW",
+
+            imageCategory:
+              data.image_category ||
+              "not_analyzed",
+
+            imagePiiDetected:
+              Boolean(
+                data.image_pii_detected
+              ),
+
+            imagePii:
+              Array.isArray(
+                data.image_pii
+              )
+                ? data.image_pii
+                : [],
+
+            llmCalled:
+              Boolean(
+                data.llm_called
+              ),
+
+            logId:
+              data.log_id ||
+              null
+          }
+
+        ]
+      );
 
     } catch (error) {
 
@@ -351,33 +623,38 @@ function App() {
         error
       );
 
+      setChatLog(
+        (previous) => [
 
-      // ==================================================
-      // SHOW ERROR IN CHAT
-      // ==================================================
+          ...previous,
 
-      setChatLog((previous) => [
+          {
+            sender: "ai",
 
-        ...previous,
+            text:
+              error?.message ||
+              "I'm having trouble connecting to the safety service right now. Please try again later.",
 
-        {
-          sender: "ai",
+            status:
+              "ERROR",
 
-          text:
-            "I'm having trouble connecting to the safety service right now. Please try again later.",
+            risk:
+              null,
 
-          status: "ERROR",
+            emotion:
+              "neutral",
 
-          risk: null,
+            pii: [],
 
-          emotion: "neutral",
+            imageRisk:
+              0,
 
-          pii: [],
+            imageTags: []
 
-          imageRisk: 0
-        }
+          }
 
-      ]);
+        ]
+      );
 
     } finally {
 
@@ -387,140 +664,267 @@ function App() {
   };
 
 
-  // ==========================================================
+  // ========================================================
   // STATUS CLASS
-  // ==========================================================
+  // ========================================================
 
-  const getStatusClass = (status) => {
+  const getStatusClass =
+    (status) => {
 
-    switch (status) {
+      switch (
+        String(status)
+          .toUpperCase()
+      ) {
 
-      case "ALLOW":
-        return "status-allow";
+        case "ALLOW":
+          return "status-allow";
 
-      case "WARN":
-        return "status-warn";
+        case "WARN":
+          return "status-warn";
 
-      case "BLOCK":
-      case "BLOCKED":
-        return "status-block";
+        case "BLOCK":
+        case "BLOCKED":
+          return "status-block";
 
-      case "ERROR":
-        return "status-error";
+        case "ERROR":
+          return "status-error";
 
-      default:
-        return "";
+        default:
+          return "";
 
-    }
-  };
+      }
+
+    };
 
 
-  // ==========================================================
-  // HANDLE FILE
-  // ==========================================================
+  // ========================================================
+  // FILE SELECTION
+  // ========================================================
 
-  const handleFileChange = (event) => {
+  const handleFileChange =
+    (event) => {
 
-    const file =
-      event.target.files?.[0];
+      const file =
+        event.target.files?.[0];
 
-    if (!file) {
-      return;
-    }
+      if (!file) {
+        return;
+      }
 
-    if (!file.type.startsWith("image/")) {
 
-      alert(
-        "Please select an image file."
+      // ====================================================
+      // IMAGE TYPE CHECK
+      // ====================================================
+
+      if (
+        !ALLOWED_IMAGE_TYPES.has(
+          file.type
+        )
+      ) {
+
+        alert(
+          "Please select a JPG, PNG, or WEBP image."
+        );
+
+        event.target.value =
+          "";
+
+        return;
+
+      }
+
+
+      // ====================================================
+      // IMAGE SIZE CHECK
+      // ====================================================
+
+      const maxSize =
+        10 * 1024 * 1024;
+
+      if (
+        file.size >
+        maxSize
+      ) {
+
+        alert(
+          "Image is too large. Maximum size is 10 MB."
+        );
+
+        event.target.value =
+          "";
+
+        return;
+
+      }
+
+
+      setSelectedFile(
+        file
       );
 
-      event.target.value = "";
-
-      return;
-    }
-
-    setSelectedFile(file);
-
-  };
+    };
 
 
-  // ==========================================================
+  // ========================================================
   // REMOVE SELECTED FILE
-  // ==========================================================
+  // ========================================================
 
-  const removeSelectedFile = () => {
+  const removeSelectedFile =
+    () => {
 
-    setSelectedFile(null);
+      setSelectedFile(
+        null
+      );
+
+      if (
+        fileInputRef.current
+      ) {
+
+        fileInputRef.current.value =
+          "";
+
+      }
+
+    };
+
+
+  // ========================================================
+  // LOGOUT
+  // ========================================================
+
+  const handleLogout = () => {
+
+    sessionStorage.removeItem(
+      "parent_auth"
+    );
+
+    sessionStorage.removeItem(
+      "parent_email"
+    );
+
+    setIsAuthenticated(
+      false
+    );
+
+    setPasswordInput("");
+    setErrorMsg("");
 
   };
 
 
-  // ==========================================================
+  // ========================================================
   // RENDER
-  // ==========================================================
+  // ========================================================
 
   return (
 
     <div className="app-container">
 
-      {/* ====================================================
-          TOP NAVIGATION TABS
-      ==================================================== */}
-      <nav style={{ background: '#1a1a1a', padding: '12px 25px', display: 'flex', gap: '15px', alignItems: 'center', borderBottom: '1px solid #333' }}>
-        <h3 style={{ color: '#fff', margin: 0, marginRight: '15px', fontSize: '16px' }}>SafeLayer Platform</h3>
+      {/* ==================================================
+          NAVIGATION
+          ================================================== */}
+
+      <nav>
+
+        <h3>
+          SafeLayer Platform
+        </h3>
+
         <button
-          onClick={() => setActiveTab('chat')}
-          style={{
-            background: activeTab === 'chat' ? '#007bff' : 'transparent',
-            color: '#fff',
-            border: 'none',
-            padding: '6px 14px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: '600'
-          }}
+          type="button"
+          onClick={() =>
+            setActiveTab("chat")
+          }
+          className={
+            activeTab === "chat"
+              ? "nav-active"
+              : ""
+          }
         >
           Child Chat
         </button>
+
         <button
-          onClick={() => setActiveTab('dashboard')}
-          style={{
-            background: activeTab === 'dashboard' ? '#007bff' : 'transparent',
-            color: '#fff',
-            border: 'none',
-            padding: '6px 14px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: '600'
-          }}
+          type="button"
+          onClick={() =>
+            setActiveTab(
+              "dashboard"
+            )
+          }
+          className={
+            activeTab ===
+            "dashboard"
+              ? "nav-active"
+              : ""
+          }
         >
           Parent Dashboard
         </button>
+
         <button
-          onClick={() => setActiveTab('profile')}
-          style={{
-            background: activeTab === 'profile' ? '#007bff' : 'transparent',
-            color: '#fff',
-            border: 'none',
-            padding: '6px 14px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontWeight: '600'
-          }}
+          type="button"
+          onClick={() =>
+            setActiveTab(
+              "profile"
+            )
+          }
+          className={
+            activeTab ===
+            "profile"
+              ? "nav-active"
+              : ""
+          }
         >
           Profile
         </button>
+
+        {isAuthenticated && (
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="nav-logout"
+          >
+            Logout
+          </button>
+
+        )}
+
       </nav>
 
-      {activeTab === 'dashboard' ? (
-        isAuthenticated ? <ParentDashboard /> : renderPasswordGate()
-      ) : activeTab === 'profile' ? (
-        isAuthenticated ? <Profile /> : renderPasswordGate()
+
+      {/* ==================================================
+          PARENT DASHBOARD
+          ================================================== */}
+
+      {activeTab ===
+      "dashboard" ? (
+
+        isAuthenticated
+          ? (
+            <ParentDashboard />
+          )
+          : (
+            renderPasswordGate()
+          )
+
+      ) : activeTab ===
+        "profile" ? (
+
+        isAuthenticated
+          ? (
+            <Profile />
+          )
+          : (
+            renderPasswordGate()
+          )
+
       ) : (
+
         <>
-          {/* ====================================================
+          {/* ================================================
               HEADER
-          ==================================================== */}
+              ================================================= */}
 
           <header className="app-header">
 
@@ -529,19 +933,23 @@ function App() {
             </h2>
 
             <p>
-              A universal safety layer for secure AI interactions.
+              A universal safety layer
+              for secure AI interactions.
             </p>
 
           </header>
 
 
-          {/* ====================================================
-              CHAT
-          ==================================================== */}
+          {/* ================================================
+              CHAT WINDOW
+              ================================================= */}
 
-          <main className="chat-window">
+          <main
+            className="chat-window"
+          >
 
-            {chatLog.length === 0 && (
+            {chatLog.length ===
+              0 && (
 
               <div className="welcome-message">
 
@@ -550,8 +958,9 @@ function App() {
                 </h3>
 
                 <p>
-                  Ask questions, explore ideas, learn,
-                  or get help with everyday tasks.
+                  Ask questions, explore
+                  ideas, learn, or get help
+                  with everyday tasks.
                 </p>
 
               </div>
@@ -559,26 +968,37 @@ function App() {
             )}
 
 
-            {chatLog.map((chat, index) => (
+            {chatLog.map(
+              (chat, index) => (
 
               <div
                 key={index}
                 className={`message ${chat.sender}`}
               >
 
-                <strong>
-                  {chat.sender === "child"
+                {/* =========================================
+                    SENDER
+                    ========================================= */}
+
+                <strong className="message-sender">
+
+                  {chat.sender ===
+                  "child"
                     ? "You"
                     : "Assistant"}
+
                   :
+
                 </strong>
 
 
-                {/* ==============================================
-                    TEXT
-                ============================================== */}
+                {/* =========================================
+                    USER MESSAGE
+                    ========================================= */}
 
-                {chat.text && (
+                {chat.sender ===
+                  "child" &&
+                  chat.text && (
 
                   <p className="message-text">
                     {chat.text}
@@ -587,9 +1007,48 @@ function App() {
                 )}
 
 
-                {/* ==============================================
-                    IMAGE
-                ============================================== */}
+                {/* =========================================
+                    ASSISTANT MARKDOWN
+                    ========================================= */}
+
+                {chat.sender ===
+                  "ai" &&
+                  chat.text && (
+
+                  <div className="markdown-response">
+
+                    <ReactMarkdown
+                      remarkPlugins={[
+                        remarkGfm
+                      ]}
+                      components={{
+                        a: ({
+                          children,
+                          ...props
+                        }) => (
+
+                          <a
+                            {...props}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {children}
+                          </a>
+
+                        )
+                      }}
+                    >
+                      {chat.text}
+                    </ReactMarkdown>
+
+                  </div>
+
+                )}
+
+
+                {/* =========================================
+                    UPLOADED IMAGE
+                    ========================================= */}
 
                 {chat.image && (
 
@@ -602,24 +1061,27 @@ function App() {
                 )}
 
 
-                {/* ==============================================
+                {/* =========================================
                     FILE NAME
-                ============================================== */}
+                    ========================================= */}
 
                 {chat.fileName && (
 
                   <div className="file-name">
+
                     📎 {chat.fileName}
+
                   </div>
 
                 )}
 
 
-                {/* ==============================================
-                    SAFETY INFORMATION
-                ============================================== */}
+                {/* =========================================
+                    SAFETY METADATA
+                    ========================================= */}
 
-                {chat.sender === "ai" && (
+                {chat.sender ===
+                  "ai" && (
 
                   <div className="safety-meta">
 
@@ -635,9 +1097,11 @@ function App() {
                           }
                         >
 
-                          Status: {chat.status}
+                          Status:{" "}
+                          {chat.status}
 
-                          {chat.risk !== null &&
+                          {chat.risk !==
+                            null &&
                             ` | Risk: ${chat.risk}`}
 
                         </span>
@@ -649,7 +1113,7 @@ function App() {
 
                         <span className="emotion-badge">
 
-                          🧠 Emotion:
+                          🧠 Emotion:{" "}
 
                           <strong>
                             {chat.emotion}
@@ -662,17 +1126,19 @@ function App() {
                     </div>
 
 
-                    {/* ==========================================
-                        IMAGE RISK
-                    ========================================== */}
 
-                    {chat.imageRisk > 0 && (
+
+
+                    {/* =====================================
+                        IMAGE RISK
+                        ===================================== */}
+
+                    {chat.imageRisk >
+                      0 && (
 
                       <div className="image-risk">
 
-                        🖼️ Image Risk Score:
-
-                        {" "}
+                        🖼️ Image Risk Score:{" "}
 
                         {chat.imageRisk}
 
@@ -681,54 +1147,173 @@ function App() {
                     )}
 
 
-                    {/* ==========================================
-                        WARNING
-                    ========================================== */}
+                    {/* =====================================
+                        IMAGE STATUS
+                        ===================================== */}
 
-                    {chat.warning && (
+                    {chat.imageStatus &&
+                      chat.imageStatus !==
+                        "ALLOW" && (
 
-                      <div className="warning-message">
+                      <div className="metadata-detail">
 
-                        ⚠️ {chat.warning}
+                        Image status:{" "}
+
+                        <strong>
+                          {
+                            chat.imageStatus
+                          }
+                        </strong>
 
                       </div>
 
                     )}
 
 
-                    {/* ==========================================
-                        PII
-                    ========================================== */}
+                    {/* =====================================
+                        WARNING
+                        ===================================== */}
+
+                    {chat.warning && (
+
+                      <div className="warning-message">
+
+                        ⚠️{" "}
+                        {chat.warning}
+
+                      </div>
+
+                    )}
+
+
+                    {/* =====================================
+                        SAFETY REASON
+                        ===================================== */}
+
+                    {chat.reason &&
+                      chat.status !==
+                        "ALLOW" && (
+
+                      <div className="reason-message">
+
+                        <strong>
+                          Safety reason:
+                        </strong>{" "}
+
+                        {chat.reason}
+
+                      </div>
+
+                    )}
+
+
+                    {/* =====================================
+                        TEXT PII
+                        ===================================== */}
 
                     {chat.pii &&
                       chat.pii.length > 0 && (
 
-                        <div className="pii-warning">
+                      <div className="pii-warning">
 
-                          <strong>
-                            ⚠️ Sensitive information detected
-                          </strong>
+                        <strong>
+                          ⚠️ Sensitive information detected
+                        </strong>
 
-                          <ul>
+                        <ul>
 
-                            {chat.pii.map(
-                              (item, piiIndex) => (
+                          {chat.pii.map(
+                            (
+                              item,
+                              piiIndex
+                            ) => (
 
-                                <li key={piiIndex}>
+                              <li
+                                key={
+                                  piiIndex
+                                }
+                              >
 
-                                  {item.type ||
-                                    "Sensitive information"}
+                                {item.type ||
+                                  "Sensitive information"}
 
-                                </li>
+                              </li>
 
-                              )
-                            )}
+                            )
+                          )}
 
-                          </ul>
+                        </ul>
 
-                        </div>
+                      </div>
 
-                      )}
+                    )}
+
+
+                    {/* =====================================
+                        IMAGE PII
+                        ===================================== */}
+
+                    {chat.imagePiiDetected &&
+                      chat.imagePii &&
+                      chat.imagePii.length >
+                        0 && (
+
+                      <div className="pii-warning image-pii-warning">
+
+                        <strong>
+                          🖼️ Sensitive information
+                          detected in image
+                        </strong>
+
+                        <ul>
+
+                          {chat.imagePii.map(
+                            (
+                              item,
+                              piiIndex
+                            ) => (
+
+                              <li
+                                key={
+                                  piiIndex
+                                }
+                              >
+
+                                {item.type ||
+                                  "Sensitive image information"}
+
+                              </li>
+
+                            )
+                          )}
+
+                        </ul>
+
+                      </div>
+
+                    )}
+
+
+                    {/* =====================================
+                        EXTERNAL AI STATUS
+                        ===================================== */}
+
+                    {chat.status !==
+                      "ERROR" &&
+                      typeof chat.llmCalled ===
+                        "boolean" && (
+
+                      <div className="metadata-detail">
+
+                        External AI response:{" "}
+
+                        {chat.llmCalled
+                          ? "Processed"
+                          : "Not called"}
+
+                      </div>
+
+                    )}
 
                   </div>
 
@@ -736,12 +1321,12 @@ function App() {
 
               </div>
 
-            ))}
+            ) )}
 
 
-            {/* ==================================================
+            {/* ==============================================
                 LOADING
-            ================================================== */}
+                ============================================== */}
 
             {loading && (
 
@@ -751,30 +1336,35 @@ function App() {
                   ●
                 </span>
 
-                Safety Layer is analyzing your
-                message...
+                Safety Layer is analyzing
+                your message...
 
               </div>
 
             )}
 
 
-            <div ref={chatEndRef} />
+            <div
+              ref={chatEndRef}
+            />
 
           </main>
 
 
-          {/* ====================================================
+          {/* =================================================
               INPUT AREA
-          ==================================================== */}
+              ================================================= */}
 
           <footer className="input-area">
 
             <input
+              ref={fileInputRef}
               id="file-upload"
               type="file"
-              accept="image/*"
-              onChange={handleFileChange}
+              accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+              onChange={
+                handleFileChange
+              }
               disabled={loading}
               className="hidden-file-input"
             />
@@ -785,11 +1375,11 @@ function App() {
               className="attach-button"
             >
 
-              📷
+              📷{" "}
 
               {selectedFile
-                ? " Image selected"
-                : " Attach Image"}
+                ? "Image selected"
+                : "Attach Image"}
 
             </label>
 
@@ -799,8 +1389,11 @@ function App() {
               <button
                 type="button"
                 className="remove-file-button"
-                onClick={removeSelectedFile}
+                onClick={
+                  removeSelectedFile
+                }
                 disabled={loading}
+                aria-label="Remove selected image"
               >
                 ×
               </button>
@@ -810,14 +1403,20 @@ function App() {
 
             <form
               className="message-form"
-              onSubmit={sendMessage}
+              onSubmit={
+                sendMessage
+              }
             >
 
               <input
                 type="text"
                 value={message}
-                onChange={(event) =>
-                  setMessage(event.target.value)
+                onChange={(
+                  event
+                ) =>
+                  setMessage(
+                    event.target.value
+                  )
                 }
                 placeholder="Ask me anything..."
                 disabled={loading}
@@ -846,7 +1445,9 @@ function App() {
             </form>
 
           </footer>
+
         </>
+
       )}
 
     </div>

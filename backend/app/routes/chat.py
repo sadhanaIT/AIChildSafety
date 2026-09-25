@@ -1,3 +1,4 @@
+
 # ============================================================
 # AI CHILD SAFETY - CHAT ROUTE
 # ============================================================
@@ -1122,29 +1123,51 @@ async def process_chat_message(
         # ========================================================
         # IMAGE PRIVACY & CONTENT BLOCKING (Faces & Houses)
         # ========================================================
+        # Keep the existing privacy rule, but rely only on actual
+        # analyzer metadata. Never block only because a filename
+        # contains a word such as "house".
         restricted_image_tags = [
             "face", "person", "human", "portrait", "people",
-            "house", "building", "home", "residence", "architecture", "property", "villa"
+            "house", "building", "home", "residence",
+            "architecture", "property", "villa"
         ]
 
         has_restricted_content = any(
-            any(keyword in tag.lower() for keyword in restricted_image_tags)
+            any(
+                keyword in _safe_string(tag).lower()
+                for keyword in restricted_image_tags
+            )
             for tag in image_tags
         )
 
-        if has_restricted_content or any(kw in image_category.lower() for kw in ["house", "building", "architecture", "home", "face"]):
+        category_text = _safe_string(
+            image_category
+        ).lower()
+
+        has_restricted_category = any(
+            keyword in category_text
+            for keyword in [
+                "house", "building", "architecture",
+                "home", "face", "person", "residence",
+                "property", "villa"
+            ]
+        )
+
+        if has_restricted_content or has_restricted_category:
+
             decision = "BLOCK"
             image_status = "BLOCK"
             risk_score = 1.0
-            reason = "Blocked due to restricted visual content (faces or private structures detected)."
-            warning_message = "Privacy Safety Alert: Uploading photos containing human faces or residential houses is blocked for safety."
 
-            # TEMPORARY DEMO OVERRIDE: Force block for demonstration
-            if file and "house" in file.filename.lower():
-                decision = "BLOCK"
-                image_status = "BLOCK"
-                risk_score = 1.0
-                warning_message = "Privacy Safety Alert: Uploading photos containing human faces or residential houses is blocked for safety."
+            reason = (
+                "Blocked due to restricted visual content "
+                "(faces or private structures detected)."
+            )
+
+            warning_message = (
+                "Privacy Safety Alert: Uploading photos containing "
+                "human faces or residential houses is blocked for safety."
+            )
     # ========================================================
     # 5. TEXT HARM + EMOTION
     # ========================================================
@@ -1796,9 +1819,41 @@ async def process_chat_message(
 
     if decision == "BLOCK":
 
-        ai_response_text = (
-            warning_message or "Privacy Safety Alert: Uploading photos containing human faces or residential houses is blocked for safety."
-        )
+        # Keep the response consistent with the reason for the block.
+        # Do not show a face/house message for unrelated blocks such as
+        # harmful text or critical PII.
+        if warning_message:
+            ai_response_text = warning_message
+
+        elif harmful_intent:
+            ai_response_text = (
+                "I can't help with that request. "
+                "Let's try something safe and helpful instead."
+            )
+
+        elif critical_text_pii:
+            ai_response_text = (
+                "I can't process that message because it contains "
+                "highly sensitive personal or security information."
+            )
+
+        elif critical_image_pii:
+            ai_response_text = (
+                "I can't process that image because it contains "
+                "highly sensitive personal or security information."
+            )
+
+        elif image_status == "BLOCK":
+            ai_response_text = (
+                "I can't process that image because it did not "
+                "pass the image safety checks."
+            )
+
+        else:
+            ai_response_text = (
+                "I can't help with that request. "
+                "Let's try something safe and helpful instead."
+            )
 
         log_id = _save_safety_log(
             db=db,
@@ -1912,8 +1967,34 @@ async def process_chat_message(
             )
 
     # ========================================================
-    # 17. GROQ API CONNECTOR
+    # 17. SAFE IMAGE FORWARDING + GROQ API CONNECTOR
     # ========================================================
+
+    # The safety layer can forward a safe image to a vision-capable
+    # external connector. If image PII was detected, the original
+    # image is NOT forwarded because this route has no pixel-level
+    # redaction capability.
+    llm_image_bytes = None
+    llm_image_mime_type = None
+
+    if has_image:
+
+        if image_pii:
+
+            image_context = (
+                (image_context + " ")
+                if image_context
+                else ""
+            ) + (
+                "The application detected personal or sensitive "
+                "information in the image, so the original image "
+                "was not forwarded to the external AI provider."
+            )
+
+        else:
+
+            llm_image_bytes = image_bytes
+            llm_image_mime_type = image_mime_type
 
     llm_start = perf_counter()
 
@@ -1935,13 +2016,9 @@ async def process_chat_message(
 
                 image_context=image_context,
 
-                image_bytes=image_bytes
-                if has_image
-                else None,
+                image_bytes=llm_image_bytes,
 
-                image_mime_type=image_mime_type
-                if has_image
-                else None,
+                image_mime_type=llm_image_mime_type,
             )
         )
 
@@ -2033,7 +2110,22 @@ async def process_chat_message(
                 provider_pii = []
 
         except Exception as provider_pii_error:
-            provider_pii = []
+            print(
+                "Provider response PII analysis failed:",
+                provider_pii_error,
+            )
+
+            # Do not expose a provider response that could not be
+            # checked for PII. Treat the checking failure as a block.
+            provider_pii = [
+                {
+                    "type": "PII_ANALYSIS_ERROR",
+                    "risk_level": "CRITICAL",
+                    "severity": "CRITICAL",
+                    "masked": "[ANALYSIS ERROR]",
+                    "source": "system",
+                }
+            ]
 
         try:
 
@@ -2179,8 +2271,76 @@ async def process_chat_message(
                     "automatically removed."
                 )
 
-            except Exception:
-                pass
+            except Exception as provider_redaction_error:
+
+                print(
+                    "Provider response PII redaction failed:",
+                    provider_redaction_error,
+                )
+
+                decision = "BLOCK"
+                risk_score = 1.0
+                reason = (
+                    "The AI response contained personal information "
+                    "that could not be safely redacted."
+                )
+                warning_message = (
+                    "The AI response was blocked because its personal "
+                    "information could not be safely removed."
+                )
+                ai_response_text = (
+                    "I couldn't safely provide that AI response."
+                )
+
+                log_id = _save_safety_log(
+                    db=db,
+                    child_message=(
+                        _prepare_log_message(
+                            user_message,
+                            pii_results,
+                        )
+                        if has_text
+                        else "[IMAGE UPLOAD]"
+                    ),
+                    ai_response="[AI RESPONSE BLOCKED]",
+                    age_group=age_group,
+                    emotion=emotion,
+                    risk_score=1.0,
+                    decision="BLOCK",
+                    pii_summary=pii_summary,
+                )
+
+                total_time = (
+                    perf_counter()
+                    - request_start
+                )
+
+                return _build_response(
+                    decision="BLOCK",
+                    risk_score=1.0,
+                    emotion=emotion,
+                    emotion_confidence=emotion_confidence,
+                    emotion_confidence_level=(
+                        emotion_confidence_level
+                    ),
+                    pii_results=pii_results,
+                    response=ai_response_text,
+                    warning=warning_message,
+                    reason=reason,
+                    harm_score=harm_score,
+                    harmful_intent=harmful_intent,
+                    harmful_intent_type=harmful_intent_type,
+                    harmful_intent_score=harmful_intent_score,
+                    image_risk=image_risk,
+                    image_tags=image_tags,
+                    image_status=image_status,
+                    image_category=image_category,
+                    image_reason=image_reason,
+                    image_pii=image_pii,
+                    llm_called=True,
+                    processing_time=total_time,
+                    log_id=log_id,
+                )
 
     # ========================================================
     # 19. WARN MESSAGE & LOGGING
@@ -2270,4 +2430,5 @@ async def process_chat_message(
         processing_time=total_time,
         log_id=log_id,
     )
+
 

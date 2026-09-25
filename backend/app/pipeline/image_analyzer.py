@@ -26,12 +26,19 @@
 #     candidate is treated as PAYMENT_CARD even if Luhn fails.
 #   - A second digit-focused OCR pass improves detection when
 #     normal OCR confuses digits with letters.
+#
+# OCR RELIABILITY DESIGN:
+#   - Large images are resized before OCR.
+#   - General OCR and digit OCR are independent.
+#   - Failure of one OCR pass does not discard the other.
+#   - If both OCR passes fail while OCR is available,
+#     the image safety analysis fails closed with BLOCK.
 # ============================================================
 
 import io
 import os
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 from PIL import (
     Image,
@@ -77,7 +84,21 @@ DEFAULT_TESSERACT_PATH = (
     r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 )
 
-OCR_TIMEOUT_SECONDS = 10
+# General OCR timeout.
+OCR_TIMEOUT_SECONDS = 8
+
+# Card / digit OCR gets a separate timeout.
+CARD_OCR_TIMEOUT_SECONDS = 6
+
+# OCR resizing limits.
+#
+# Prevents very large camera images from causing
+# Tesseract to run for too long.
+MIN_OCR_LONGEST_DIMENSION = 1400
+MAX_OCR_LONGEST_DIMENSION = 2200
+
+# Card-specific OCR target.
+CARD_OCR_TARGET_DIMENSION = 1800
 
 # Prevent OCR from producing an unnecessarily large
 # internal string.
@@ -99,7 +120,10 @@ try:
 
     import pytesseract
 
-    if os.path.exists(DEFAULT_TESSERACT_PATH):
+    if os.path.exists(
+        DEFAULT_TESSERACT_PATH
+    ):
+
         pytesseract.pytesseract.tesseract_cmd = (
             DEFAULT_TESSERACT_PATH
         )
@@ -107,6 +131,7 @@ try:
     try:
 
         pytesseract.get_tesseract_version()
+
         OCR_AVAILABLE = True
 
     except Exception:
@@ -116,6 +141,7 @@ try:
 except ImportError:
 
     pytesseract = None
+
     OCR_AVAILABLE = False
 
 
@@ -123,22 +149,35 @@ except ImportError:
 # TEXT HELPERS
 # ============================================================
 
-def _clean_text(value: Any) -> str:
+def _clean_text(
+    value: Any,
+) -> str:
     """
-    Normalize text without logging or exposing sensitive
-    contents.
+    Normalize text without logging or exposing
+    sensitive contents.
     """
 
     if value is None:
+
         return ""
 
     try:
+
         value = str(value)
+
     except Exception:
+
         return ""
 
-    value = value.replace("\r\n", "\n")
-    value = value.replace("\r", "\n")
+    value = value.replace(
+        "\r\n",
+        "\n",
+    )
+
+    value = value.replace(
+        "\r",
+        "\n",
+    )
 
     value = re.sub(
         r"[ \t]+",
@@ -154,21 +193,28 @@ def _clean_text(value: Any) -> str:
 
     value = value.strip()
 
-    # Keep OCR bounded internally.
     if len(value) > MAX_OCR_CHARS:
-        value = value[:MAX_OCR_CHARS]
+
+        value = value[
+            :MAX_OCR_CHARS
+        ]
 
     return value
 
 
-def _digits_only(value: Any) -> str:
+def _digits_only(
+    value: Any,
+) -> str:
     """
     Return digits only.
     """
 
     try:
+
         text = str(value)
+
     except Exception:
+
         return ""
 
     return re.sub(
@@ -185,9 +231,13 @@ def _clamp(
 ) -> float:
 
     try:
+
         number = float(value)
 
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ):
 
         number = 0.0
 
@@ -210,15 +260,19 @@ def _luhn_check(
     """
     Validate a possible payment-card number.
 
-    Luhn is useful for reducing false positives in ordinary
-    text. However, image/card detection also supports
-    contextual detection because synthetic/test card images
-    can contain intentionally invalid numbers.
+    Luhn reduces false positives in ordinary text.
+
+    Contextual card detection is still supported separately
+    because synthetic/test card numbers may intentionally
+    fail Luhn validation.
     """
 
-    digits = _digits_only(card_number)
+    digits = _digits_only(
+        card_number
+    )
 
     if not 13 <= len(digits) <= 19:
+
         return False
 
     total = 0
@@ -234,6 +288,7 @@ def _luhn_check(
             number *= 2
 
             if number > 9:
+
                 number -= 9
 
         total += number
@@ -249,13 +304,20 @@ def _mask_card(
     value: str,
 ) -> str:
 
-    digits = _digits_only(value)
+    digits = _digits_only(
+        value
+    )
 
     if len(digits) <= 4:
+
         return "****"
 
     return (
-        "*" * (len(digits) - 4)
+        "*"
+        * (
+            len(digits)
+            - 4
+        )
         + digits[-4:]
     )
 
@@ -279,7 +341,11 @@ def _mask_email(
 
             masked_username = (
                 username[0]
-                + "*" * (len(username) - 1)
+                + "*"
+                * (
+                    len(username)
+                    - 1
+                )
             )
 
         return (
@@ -300,11 +366,16 @@ def _mask_generic(
     value = str(value)
 
     if len(value) <= 4:
-        return "*" * len(value)
+
+        return "*"
 
     return (
         value[:2]
-        + "*" * (len(value) - 2)
+        + "*"
+        * (
+            len(value)
+            - 2
+        )
     )
 
 
@@ -325,6 +396,7 @@ def _add_pii(
     """
 
     if not value:
+
         return
 
     clean_value = str(
@@ -332,6 +404,7 @@ def _add_pii(
     ).strip()
 
     if not clean_value:
+
         return
 
     pii_type = str(
@@ -342,7 +415,9 @@ def _add_pii(
         severity
     ).upper().strip()
 
-    normalized_value = clean_value.lower()
+    normalized_value = (
+        clean_value.lower()
+    )
 
     # --------------------------------------------------------
     # Duplicate prevention
@@ -351,8 +426,11 @@ def _add_pii(
     for existing in results:
 
         if (
-            existing.get("_type") == pii_type
-            and existing.get("_value_key")
+            existing.get("_type")
+            == pii_type
+            and existing.get(
+                "_value_key"
+            )
             == normalized_value
         ):
 
@@ -411,8 +489,8 @@ def _matches_overlap(
     spans: List[Any],
 ) -> bool:
     """
-    Check whether a candidate OCR span overlaps an existing
-    sensitive-number match.
+    Check whether a candidate OCR span overlaps an
+    existing sensitive-number match.
     """
 
     for span in spans:
@@ -446,12 +524,10 @@ def _has_card_context(
     """
     Determine whether OCR contains strong payment-card
     context.
-
-    This is intentionally conservative and looks for
-    recognizable card-related words.
     """
 
     if not text:
+
         return False
 
     return bool(
@@ -492,17 +568,14 @@ def _extract_card_candidates(
     """
     Find possible 13-19 digit card-number spans.
 
-    This function intentionally allows spaces and hyphens.
-
     Examples:
         4111 1111 1111 1111
         4111-1111-1111-1111
         4111111111111111
-
-    It does not decide whether the number is valid.
     """
 
     if not text:
+
         return []
 
     card_pattern = re.compile(
@@ -512,7 +585,9 @@ def _extract_card_candidates(
     )
 
     return list(
-        card_pattern.finditer(text)
+        card_pattern.finditer(
+            text
+        )
     )
 
 
@@ -546,6 +621,7 @@ def detect_image_pii(
     results: List[Dict[str, Any]] = []
 
     if not ocr_text:
+
         return results
 
     text = _clean_text(
@@ -553,6 +629,7 @@ def detect_image_pii(
     )
 
     if not text:
+
         return results
 
     # ========================================================
@@ -569,12 +646,18 @@ def detect_image_pii(
 
     card_matches = []
 
-    for match in _extract_card_candidates(text):
+    for match in _extract_card_candidates(
+        text
+    ):
 
         candidate = match.group(0)
-        digits = _digits_only(candidate)
+
+        digits = _digits_only(
+            candidate
+        )
 
         if not 13 <= len(digits) <= 19:
+
             continue
 
         # ----------------------------------------------------
@@ -584,11 +667,9 @@ def detect_image_pii(
         #
         # OR
         #
-        # 2. Strong card context + 13-19 digit candidate
-        #    => card
+        # 2. Strong card context + candidate => card
         #
-        # The second rule is necessary for synthetic/test
-        # card images and OCR imperfections.
+        # This supports synthetic/test card images.
         # ----------------------------------------------------
 
         if (
@@ -647,7 +728,9 @@ def detect_image_pii(
         re.IGNORECASE,
     )
 
-    for match in cvv_pattern.finditer(text):
+    for match in cvv_pattern.finditer(
+        text
+    ):
 
         _add_pii(
             results,
@@ -670,7 +753,9 @@ def detect_image_pii(
         re.IGNORECASE,
     )
 
-    for match in otp_pattern.finditer(text):
+    for match in otp_pattern.finditer(
+        text
+    ):
 
         _add_pii(
             results,
@@ -683,13 +768,6 @@ def detect_image_pii(
     # AADHAAR
     # ========================================================
 
-    # --------------------------------------------------------
-    # Spaced / hyphenated Aadhaar
-    #
-    # 1234 5678 9012
-    # 1234-5678-9012
-    # --------------------------------------------------------
-
     aadhaar_pattern = re.compile(
         r"(?<!\d)"
         r"\d{4}"
@@ -700,14 +778,16 @@ def detect_image_pii(
         r"(?!\d)"
     )
 
-    for match in aadhaar_pattern.finditer(text):
+    for match in aadhaar_pattern.finditer(
+        text
+    ):
 
-        # Do not duplicate a payment-card match.
         if _matches_overlap(
             match.start(),
             match.end(),
             card_matches,
         ):
+
             continue
 
         _add_pii(
@@ -729,7 +809,9 @@ def detect_image_pii(
         re.IGNORECASE,
     )
 
-    for match in aadhaar_context_pattern.finditer(text):
+    for match in aadhaar_context_pattern.finditer(
+        text
+    ):
 
         _add_pii(
             results,
@@ -747,7 +829,9 @@ def detect_image_pii(
         re.IGNORECASE,
     )
 
-    for match in pan_pattern.finditer(text):
+    for match in pan_pattern.finditer(
+        text
+    ):
 
         _add_pii(
             results,
@@ -766,7 +850,9 @@ def detect_image_pii(
         r"[A-Za-z]{2,}\b"
     )
 
-    for match in email_pattern.finditer(text):
+    for match in email_pattern.finditer(
+        text
+    ):
 
         _add_pii(
             results,
@@ -786,15 +872,16 @@ def detect_image_pii(
         r"(?!\d)"
     )
 
-    for match in phone_pattern.finditer(text):
+    for match in phone_pattern.finditer(
+        text
+    ):
 
-        # A phone-number candidate must not be treated as
-        # another PII item if it overlaps a payment card.
         if _matches_overlap(
             match.start(),
             match.end(),
             card_matches,
         ):
+
             continue
 
         _add_pii(
@@ -814,7 +901,9 @@ def detect_image_pii(
         re.IGNORECASE,
     )
 
-    for match in url_pattern.finditer(text):
+    for match in url_pattern.finditer(
+        text
+    ):
 
         url_value = match.group(0)
 
@@ -900,11 +989,8 @@ def _open_image(
     """
     Safely open and fully load an image.
 
-    Raw bytes are not returned.
-
     Pillow determines whether the actual image bytes can
-    be decoded. This keeps image validation based on the
-    actual file rather than trusting only a browser MIME type.
+    be decoded.
     """
 
     _validate_image_bytes(
@@ -917,7 +1003,9 @@ def _open_image(
             io.BytesIO(file_bytes)
         ) as image_check:
 
-            width, height = image_check.size
+            width, height = (
+                image_check.size
+            )
 
             if (
                 width <= 0
@@ -928,25 +1016,23 @@ def _open_image(
                     "Image dimensions are invalid."
                 )
 
-            if width * height > MAX_IMAGE_PIXELS:
+            if (
+                width * height
+                > MAX_IMAGE_PIXELS
+            ):
 
                 raise ValueError(
                     "Image contains too many pixels."
                 )
 
-            # Apply EXIF orientation while still inside the
-            # controlled image object.
             image = ImageOps.exif_transpose(
                 image_check
             )
 
-            # Convert to RGB because the image classifier
-            # and OCR expect a normal image representation.
             image = image.convert(
                 "RGB"
             )
 
-            # Fully load pixels before leaving the context.
             image.load()
 
             return image.copy()
@@ -970,6 +1056,89 @@ def _open_image(
 
 
 # ============================================================
+# OCR RESIZING HELPER
+# ============================================================
+
+def _resize_for_ocr(
+    image: Image.Image,
+    target_dimension: int,
+) -> Image.Image:
+    """
+    Resize an image to a practical OCR dimension.
+
+    This prevents very large camera images from making
+    Tesseract extremely slow or timing out.
+
+    The image is:
+        - upscaled when very small
+        - downscaled when very large
+        - otherwise kept close to its original size
+    """
+
+    image = image.copy()
+
+    width, height = image.size
+
+    if (
+        width <= 0
+        or height <= 0
+    ):
+
+        return image
+
+    longest_dimension = max(
+        width,
+        height,
+    )
+
+    if (
+        longest_dimension
+        < target_dimension
+    ):
+
+        scale = (
+            target_dimension
+            / longest_dimension
+        )
+
+    elif (
+        longest_dimension
+        > MAX_OCR_LONGEST_DIMENSION
+    ):
+
+        scale = (
+            MAX_OCR_LONGEST_DIMENSION
+            / longest_dimension
+        )
+
+    else:
+
+        scale = 1.0
+
+    if abs(scale - 1.0) < 0.01:
+
+        return image
+
+    new_width = max(
+        1,
+        int(width * scale),
+    )
+
+    new_height = max(
+        1,
+        int(height * scale),
+    )
+
+    return image.resize(
+        (
+            new_width,
+            new_height,
+        ),
+        Image.Resampling.LANCZOS,
+    )
+
+
+# ============================================================
 # OCR PREPROCESSING
 # ============================================================
 
@@ -988,30 +1157,22 @@ def _prepare_image_for_ocr(
         "RGB"
     )
 
-    width, height = image.size
-
-    if width < 1400:
-
-        scale = 1400 / max(
-            width,
-            1,
-        )
-
-        image = image.resize(
-            (
-                int(width * scale),
-                int(height * scale),
-            ),
-            Image.Resampling.LANCZOS,
-        )
+    image = _resize_for_ocr(
+        image,
+        MIN_OCR_LONGEST_DIMENSION,
+    )
 
     image = ImageEnhance.Contrast(
         image
-    ).enhance(1.5)
+    ).enhance(
+        1.5
+    )
 
     image = ImageEnhance.Sharpness(
         image
-    ).enhance(1.2)
+    ).enhance(
+        1.2
+    )
 
     return image
 
@@ -1025,19 +1186,6 @@ def _prepare_image_for_card_ocr(
 ) -> Image.Image:
     """
     Additional preprocessing for payment-card text.
-
-    This does not return OCR data. It only creates an
-    internally processed image for Tesseract.
-
-    The goal is to improve recognition when characters such
-    as:
-        4 -> $
-        5 -> S
-        6 -> b
-        7 -> ?
-        8 -> B
-
-    are confused by normal OCR.
     """
 
     image = ImageOps.exif_transpose(
@@ -1046,58 +1194,68 @@ def _prepare_image_for_card_ocr(
         "RGB"
     )
 
-    width, height = image.size
-
-    # Card numbers are usually displayed across a horizontal
-    # portion of the image. Upscaling improves digit recognition.
-    target_width = 1800
-
-    if width < target_width:
-
-        scale = target_width / max(
-            width,
-            1,
-        )
-
-        image = image.resize(
-            (
-                int(width * scale),
-                int(height * scale),
-            ),
-            Image.Resampling.LANCZOS,
-        )
+    image = _resize_for_ocr(
+        image,
+        CARD_OCR_TARGET_DIMENSION,
+    )
 
     image = ImageEnhance.Contrast(
         image
-    ).enhance(1.8)
+    ).enhance(
+        1.8
+    )
 
     image = ImageEnhance.Sharpness(
         image
-    ).enhance(1.4)
+    ).enhance(
+        1.4
+    )
 
     return image
 
 
 # ============================================================
-# OCR - GENERAL
+# OCR DETAILS
 # ============================================================
 
-def _extract_ocr_text(
+def _extract_ocr_text_details(
     image: Image.Image,
-) -> str:
+) -> Tuple[str, bool]:
     """
-    Extract OCR internally.
+    Execute both OCR passes independently.
 
-    IMPORTANT:
-        OCR text must never be returned to React,
-        external LLMs, logs, or API responses.
+    Returns:
+        (
+            cleaned_ocr_text,
+            at_least_one_pass_completed
+        )
+
+    Raw OCR stays inside this function.
     """
 
     if not OCR_AVAILABLE:
-        return ""
+
+        return (
+            "",
+            False,
+        )
 
     if pytesseract is None:
-        return ""
+
+        return (
+            "",
+            False,
+        )
+
+    general_text = ""
+    digit_text = ""
+
+    general_ocr_completed = False
+    digit_ocr_completed = False
+
+    # ========================================================
+    # GENERAL OCR
+    # ========================================================
 
     try:
 
@@ -1105,64 +1263,107 @@ def _extract_ocr_text(
             image
         )
 
-        # ----------------------------------------------------
-        # General OCR
-        # ----------------------------------------------------
-
-        general_text = pytesseract.image_to_string(
-            prepared,
-            config="--psm 6",
-            timeout=OCR_TIMEOUT_SECONDS,
+        general_text = (
+            pytesseract.image_to_string(
+                prepared,
+                config="--psm 6",
+                timeout=OCR_TIMEOUT_SECONDS,
+            )
         )
 
-        # ----------------------------------------------------
-        # Card/digit-focused OCR
-        #
-        # This is deliberately internal.
-        #
-        # It improves detection when OCR confuses digits
-        # with letters in card numbers.
-        # ----------------------------------------------------
-
-        card_prepared = _prepare_image_for_card_ocr(
-            image
-        )
-
-        digit_text = pytesseract.image_to_string(
-            card_prepared,
-            config=(
-                '--psm 6 '
-                '-c tessedit_char_whitelist="'
-                '0123456789- /"'
-            ),
-            timeout=OCR_TIMEOUT_SECONDS,
-        )
-
-        # ----------------------------------------------------
-        # Combine both OCR passes internally.
-        #
-        # Raw OCR never leaves this function.
-        # ----------------------------------------------------
-
-        combined = (
-            str(general_text or "")
-            + "\n"
-            + str(digit_text or "")
-        )
-
-        return _clean_text(
-            combined
-        )
+        # The OCR call itself completed, even if
+        # it returned no text.
+        general_ocr_completed = True
 
     except Exception as error:
 
         # Never print OCR text.
         print(
-            "OCR error:",
+            "General OCR error:",
             type(error).__name__,
         )
 
-        return ""
+    # ========================================================
+    # CARD / DIGIT OCR
+    # ========================================================
+
+    try:
+
+        card_prepared = (
+            _prepare_image_for_card_ocr(
+                image
+            )
+        )
+
+        digit_text = (
+            pytesseract.image_to_string(
+                card_prepared,
+                config=(
+                    '--psm 6 '
+                    '-c tessedit_char_whitelist='
+                    '"0123456789- /"'
+                ),
+                timeout=CARD_OCR_TIMEOUT_SECONDS,
+            )
+        )
+
+        digit_ocr_completed = True
+
+    except Exception as error:
+
+        # Never print OCR text.
+        print(
+            "Digit OCR error:",
+            type(error).__name__,
+        )
+
+    # ========================================================
+    # COMBINE SUCCESSFUL PASSES
+    # ========================================================
+
+    combined = (
+        str(
+            general_text or ""
+        )
+        + "\n"
+        + str(
+            digit_text or ""
+        )
+    )
+
+    cleaned = _clean_text(
+        combined
+    )
+
+    ocr_completed = (
+        general_ocr_completed
+        or digit_ocr_completed
+    )
+
+    return (
+        cleaned,
+        ocr_completed,
+    )
+
+
+# ============================================================
+# OCR COMPATIBILITY FUNCTION
+# ============================================================
+
+def _extract_ocr_text(
+    image: Image.Image,
+) -> str:
+    """
+    Backward-compatible OCR function.
+
+    Returns only cleaned OCR text internally.
+    """
+
+    text, _ = _extract_ocr_text_details(
+        image
+    )
+
+    return text
 
 
 # ============================================================
@@ -1196,7 +1397,10 @@ def _classify_image(
     if (
         isinstance(results, list)
         and results
-        and isinstance(results[0], list)
+        and isinstance(
+            results[0],
+            list,
+        )
     ):
 
         results = results[0]
@@ -1234,6 +1438,7 @@ def _classify_image(
         )
 
         if not label:
+
             continue
 
         normalized.append({
@@ -1397,7 +1602,9 @@ def _determine_status(
     # --------------------------------------------------------
 
     if any(
-        item.get("severity") == "CRITICAL"
+        item.get(
+            "severity"
+        ) == "CRITICAL"
         for item in image_pii
     ):
 
@@ -1407,7 +1614,10 @@ def _determine_status(
     # High-confidence unsafe visual content.
     # --------------------------------------------------------
 
-    if nsfw_score >= NSFW_BLOCK_THRESHOLD:
+    if (
+        nsfw_score
+        >= NSFW_BLOCK_THRESHOLD
+    ):
 
         return "BLOCK"
 
@@ -1415,7 +1625,10 @@ def _determine_status(
     # Moderate visual risk.
     # --------------------------------------------------------
 
-    if nsfw_score >= NSFW_WARN_THRESHOLD:
+    if (
+        nsfw_score
+        >= NSFW_WARN_THRESHOLD
+    ):
 
         return "WARN"
 
@@ -1424,7 +1637,9 @@ def _determine_status(
     # --------------------------------------------------------
 
     if any(
-        item.get("severity") == "HIGH"
+        item.get(
+            "severity"
+        ) == "HIGH"
         for item in image_pii
     ):
 
@@ -1443,33 +1658,49 @@ def _determine_category(
 ) -> str:
 
     if any(
-        item.get("severity") == "CRITICAL"
+        item.get(
+            "severity"
+        ) == "CRITICAL"
         for item in image_pii
     ):
 
-        return "sensitive_personal_information"
+        return (
+            "sensitive_personal_information"
+        )
 
-    if nsfw_score >= NSFW_BLOCK_THRESHOLD:
+    if (
+        nsfw_score
+        >= NSFW_BLOCK_THRESHOLD
+    ):
 
         return "explicit_or_nsfw"
 
-    if nsfw_score >= NSFW_WARN_THRESHOLD:
+    if (
+        nsfw_score
+        >= NSFW_WARN_THRESHOLD
+    ):
 
         return "potentially_sensitive"
 
     if any(
-        item.get("severity") == "HIGH"
+        item.get(
+            "severity"
+        ) == "HIGH"
         for item in image_pii
     ):
 
         return "personal_information"
 
     if any(
-        item.get("severity") == "MEDIUM"
+        item.get(
+            "severity"
+        ) == "MEDIUM"
         for item in image_pii
     ):
 
-        return "low_sensitivity_information"
+        return (
+            "low_sensitivity_information"
+        )
 
     return "normal"
 
@@ -1525,17 +1756,25 @@ def _determine_reason(
 
         return (
             "Critical sensitive information detected: "
-            + ", ".join(critical)
+            + ", ".join(
+                critical
+            )
         )
 
-    if nsfw_score >= NSFW_BLOCK_THRESHOLD:
+    if (
+        nsfw_score
+        >= NSFW_BLOCK_THRESHOLD
+    ):
 
         return (
             "High-confidence potentially unsafe "
             "or explicit visual content detected."
         )
 
-    if nsfw_score >= NSFW_WARN_THRESHOLD:
+    if (
+        nsfw_score
+        >= NSFW_WARN_THRESHOLD
+    ):
 
         return (
             "Potentially sensitive visual content detected."
@@ -1545,14 +1784,18 @@ def _determine_reason(
 
         return (
             "Personal information detected: "
-            + ", ".join(high)
+            + ", ".join(
+                high
+            )
         )
 
     if medium:
 
         return (
             "Potentially identifying information detected: "
-            + ", ".join(medium)
+            + ", ".join(
+                medium
+            )
         )
 
     return (
@@ -1578,7 +1821,9 @@ def _calculate_image_risk(
     # --------------------------------------------------------
 
     if any(
-        item.get("severity") == "CRITICAL"
+        item.get(
+            "severity"
+        ) == "CRITICAL"
         for item in image_pii
     ):
 
@@ -1589,7 +1834,9 @@ def _calculate_image_risk(
     # --------------------------------------------------------
 
     if any(
-        item.get("severity") == "HIGH"
+        item.get(
+            "severity"
+        ) == "HIGH"
         for item in image_pii
     ):
 
@@ -1603,7 +1850,9 @@ def _calculate_image_risk(
     # --------------------------------------------------------
 
     if any(
-        item.get("severity") == "MEDIUM"
+        item.get(
+            "severity"
+        ) == "MEDIUM"
         for item in image_pii
     ):
 
@@ -1627,13 +1876,19 @@ def _build_tags(
 
     tags = []
 
-    if nsfw_score >= NSFW_BLOCK_THRESHOLD:
+    if (
+        nsfw_score
+        >= NSFW_BLOCK_THRESHOLD
+    ):
 
         tags.append(
             "explicit_or_nsfw_content"
         )
 
-    elif nsfw_score >= NSFW_WARN_THRESHOLD:
+    elif (
+        nsfw_score
+        >= NSFW_WARN_THRESHOLD
+    ):
 
         tags.append(
             "potentially_sensitive_content"
@@ -1646,14 +1901,18 @@ def _build_tags(
         )
 
     pii_types = {
-        item.get("type")
+        item.get(
+            "type"
+        )
         for item in image_pii
         if item.get("type")
     }
 
     if (
-        "PAYMENT_CARD" in pii_types
-        or "CARD_NUMBER" in pii_types
+        "PAYMENT_CARD"
+        in pii_types
+        or "CARD_NUMBER"
+        in pii_types
     ):
 
         tags.append(
@@ -1725,6 +1984,7 @@ def _build_safe_result(
     image_pii: List[Dict[str, Any]],
     ocr_available: bool,
     ocr_detected: bool,
+    ocr_analysis_failed: bool,
 ) -> Dict[str, Any]:
     """
     Construct the final public-safe result.
@@ -1805,13 +2065,17 @@ def _build_safe_result(
 
         "image_pii": safe_pii,
 
-        # Status metadata only.
+        # Safe OCR status metadata only.
         "ocr_available": bool(
             ocr_available
         ),
 
         "ocr_detected": bool(
             ocr_detected
+        ),
+
+        "ocr_analysis_failed": bool(
+            ocr_analysis_failed
         ),
     }
 
@@ -1884,9 +2148,22 @@ def analyze_image_risk(
         # OCR
         # ====================================================
 
-        # Raw OCR exists only inside this function.
-        ocr_text = _extract_ocr_text(
+        (
+            ocr_text,
+            ocr_completed,
+        ) = _extract_ocr_text_details(
             image
+        )
+
+        # OCR is successfully completed if at least one
+        # OCR pass executed without raising an exception.
+        #
+        # An empty OCR string is acceptable. It simply means
+        # the image may not contain readable text.
+
+        ocr_analysis_failed = (
+            OCR_AVAILABLE
+            and not ocr_completed
         )
 
         # ====================================================
@@ -1896,6 +2173,60 @@ def analyze_image_risk(
         image_pii = detect_image_pii(
             ocr_text
         )
+
+        # ====================================================
+        # OCR FAIL-CLOSED SAFETY
+        # ====================================================
+
+        if ocr_analysis_failed:
+
+            print(
+                "OCR safety analysis failed. "
+                "Failing closed."
+            )
+
+            image_risk_score = 1.0
+
+            image_status = "BLOCK"
+
+            image_category = (
+                "analysis_error"
+            )
+
+            image_reason = (
+                "OCR safety analysis could "
+                "not be completed."
+            )
+
+            image_tags = [
+                "image_analysis_error",
+                "high_risk",
+            ]
+
+            return _build_safe_result(
+
+                image_risk_score=image_risk_score,
+
+                image_tags=image_tags,
+
+                image_status=image_status,
+
+                image_category=image_category,
+
+                image_reason=image_reason,
+
+                nsfw_score=nsfw_score,
+
+                normal_score=normal_score,
+
+                image_pii=[],
+
+                ocr_available=OCR_AVAILABLE,
+
+                ocr_detected=False,
+
+                ocr_analysis_failed=True,
+            )
 
         # ====================================================
         # IMAGE RISK
@@ -1970,6 +2301,8 @@ def analyze_image_risk(
             ocr_detected=bool(
                 ocr_text
             ),
+
+            ocr_analysis_failed=False,
         )
 
     finally:
@@ -1997,8 +2330,6 @@ def analyze_image(
     chat.py and tests can import:
 
         from app.pipeline.image_analyzer import analyze_image
-
-    without depending on the internal function name.
     """
 
     return analyze_image_risk(
@@ -2036,7 +2367,10 @@ def get_image_pii_types(
             "type"
         )
 
-        if pii_type and pii_type not in types:
+        if (
+            pii_type
+            and pii_type not in types
+        ):
 
             types.append(
                 str(pii_type)
@@ -2107,6 +2441,18 @@ if __name__ == "__main__":
     )
 
     print(
+        " - OCR timeout:",
+        OCR_TIMEOUT_SECONDS,
+        "seconds",
+    )
+
+    print(
+        " - Card OCR timeout:",
+        CARD_OCR_TIMEOUT_SECONDS,
+        "seconds",
+    )
+
+    print(
         " - Max image size:",
         f"{MAX_IMAGE_BYTES / (1024 * 1024):.0f} MB",
     )
@@ -2114,6 +2460,11 @@ if __name__ == "__main__":
     print(
         " - Max image pixels:",
         f"{MAX_IMAGE_PIXELS:,}",
+    )
+
+    print(
+        " - Max OCR dimension:",
+        MAX_OCR_LONGEST_DIMENSION,
     )
 
     # --------------------------------------------------------
@@ -2204,8 +2555,8 @@ if __name__ == "__main__":
         )
 
     # --------------------------------------------------------
-    # Verify the exact synthetic/test card number used in
-    # the user's image.
+    # Verify the exact synthetic/test card number used
+    # in the user's image.
     # --------------------------------------------------------
 
     test_card = (
@@ -2244,8 +2595,7 @@ if __name__ == "__main__":
     #
     # IMAGE_ANALYZER_TEST_IMAGE=C:\\path\\to\\image.png
     #
-    # before running this module if you want to test a real
-    # image through the complete analyzer.
+    # before running this module.
     #
     # Raw OCR is NEVER printed.
     # --------------------------------------------------------
@@ -2277,7 +2627,9 @@ if __name__ == "__main__":
                 "rb",
             ) as image_file:
 
-                image_bytes = image_file.read()
+                image_bytes = (
+                    image_file.read()
+                )
 
             result = analyze_image_risk(
                 image_bytes
